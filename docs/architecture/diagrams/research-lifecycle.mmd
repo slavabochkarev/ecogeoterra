@@ -1,0 +1,19 @@
+stateDiagram-v2
+    state "В браузере нет открытого исследования" as Idle
+    state "Доступно продолжение" as Continue
+    state "Активное исследование" as Active
+    state "Ожидает сохранения" as Dirty
+    state "Сохранение" as Saving
+    state "Ошибка сохранения" as Failed
+    [*] --> Idle
+    Idle --> Continue: GET active вернул UUID
+    Idle --> Active: POST create или open
+    Continue --> Active: POST open / create
+    Active --> Dirty: Изменения состояния
+    Active --> Saving: Сохранить сейчас
+    Dirty --> Saving: Debounce или переход
+    Saving --> Active: PUT подтверждён + ревизия
+    Saving --> Failed: Ошибка или конфликт
+    Failed --> Saving: Повтор после ошибки
+    Active --> Idle: POST close
+    Active --> Active: Открыть другой UUID или создать запись

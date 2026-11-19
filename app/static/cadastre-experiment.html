@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Кадастровая карта · ЭкоГеоТерра</title>
+  <link rel="stylesheet" href="/static/vendor/leaflet.css">
+  <link rel="stylesheet" href="/static/cadastre-experiment.css">
+  <script defer src="/static/vendor/leaflet.js"></script>
+  <script defer src="/static/vendor/esri-leaflet.js"></script>
+  <script defer src="/static/cadastre-esri.js"></script>
+  <script defer src="/static/cadastre-experiment.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <span class="brand">ЭкоГеоТерра</span>
+      <nav class="header-links" aria-label="Ссылки карты">
+        <div class="basemap-credit" aria-label="Источник подложки">
+          <span id="osm-credit"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a></span>
+          <span id="esri-source" aria-hidden="true"><a href="https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9" target="_blank" rel="noopener">Esri World Imagery</a></span>
+        </div>
+        <a href="/">Основная карта v0.2 <span aria-hidden="true">↗</span></a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    <div class="heading">
+      <h1>Кадастровая карта ЕГРН</h1>
+      <p>Экспериментальный просмотр участков в пределах 500 м от границ исходной территории.</p>
+    </div>
+
+    <form id="parcel-form" class="search-panel">
+      <div class="number-field">
+        <label for="cadastral-number">Кадастровый номер исходного участка</label>
+        <input id="cadastral-number" name="number" type="text" spellcheck="false" autocomplete="off"
+               maxlength="40" placeholder="63:09:0102159:753" required>
+      </div>
+      <button type="submit" id="find-parcel" class="secondary">Найти участок</button>
+      <button type="button" id="research-area" class="primary" disabled>Исследовать 500 м</button>
+    </form>
+    <p id="status" class="status" role="status" aria-live="polite">Введите кадастровый номер, чтобы показать исходный участок.</p>
+
+    <div class="workspace">
+      <section class="map-panel" aria-label="Карта земельных участков">
+        <div class="map-toolbar">
+          <div id="basemap-control" role="group" aria-label="Подложка карты"></div>
+          <label class="switch"><input id="show-boundaries" type="checkbox" checked><span>Кадастровые границы</span></label>
+          <label class="switch"><input id="show-labels" type="checkbox" checked><span>Кадастровые номера</span></label>
+          <label class="switch"><input id="show-fill" type="checkbox" aria-controls="category-legend"><span>Заливка по категориям</span></label>
+        </div>
+        <div class="map-surface">
+          <div id="cadastre-map" aria-label="Карта с кадастровыми контурами"></div>
+        </div>
+        <div class="map-legend" aria-label="Условные обозначения">
+          <span><i class="symbol source" aria-hidden="true"></i>Исходный участок</span>
+          <span><i class="symbol parcels" aria-hidden="true"></i>Участки ЕГРН</span>
+          <span id="selected-parcel-legend" hidden><i class="symbol selected" aria-hidden="true"></i>Выбранный участок</span>
+          <span><i class="symbol buffer" aria-hidden="true"></i>Буфер 500 м</span>
+        </div>
+        <div id="tile-status" class="tile-status" hidden>
+          <span id="tile-message" role="status"></span>
+          <button id="switch-to-osm" class="secondary" type="button" hidden>К OpenStreetMap</button>
+        </div>
+        <div class="map-legend category-legend" id="category-legend" aria-label="Категории земель" hidden>
+          <span><i class="swatch settlement" aria-hidden="true"></i>Земли населённых пунктов</span>
+          <span><i class="swatch industrial" aria-hidden="true"></i>Земли промышленности и специального назначения</span>
+          <span><i class="swatch agricultural" aria-hidden="true"></i>Сельскохозяйственные земли</span>
+          <span><i class="swatch other" aria-hidden="true"></i>Другие категории</span>
+          <span><i class="swatch unknown" aria-hidden="true"></i>Категория не определена</span>
+        </div>
+      </section>
+
+      <aside class="sidebar" aria-label="Сведения об участках">
+        <section class="summary">
+          <div class="summary-heading">
+            <h2>Участков на карте</h2>
+            <output id="parcel-count" aria-live="polite">0</output>
+          </div>
+          <p id="coverage">Полнота пространственной выдачи НСПД не подтверждается.</p>
+        </section>
+        <section class="coordinates" aria-labelledby="coordinates-title">
+          <h2 id="coordinates-title">Координаты WGS 84</h2>
+          <dl class="coordinate-readouts">
+            <div><dt>Курсор</dt><dd><output id="cursor-coordinates" aria-live="off">—</output></dd></div>
+            <div><dt>Выбранная точка</dt><dd><output id="selected-coordinates">—</output></dd></div>
+          </dl>
+          <form id="coordinate-form" novalidate>
+            <div class="coordinate-fields">
+              <label for="latitude">Широта<input id="latitude" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
+              <label for="longitude">Долгота<input id="longitude" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
+            </div>
+            <div class="coordinate-actions">
+              <button type="submit" class="secondary">Перейти к координатам</button>
+              <button type="button" id="copy-coordinates" class="secondary" disabled>Копировать</button>
+            </div>
+          </form>
+          <p id="coordinate-status" class="coordinate-status" role="status" hidden></p>
+        </section>
+        <section class="details" aria-labelledby="detail-title">
+          <h2 id="detail-title">Выбранный участок</h2>
+          <p id="detail-empty">Нажмите на участок на карте, чтобы посмотреть сведения.</p>
+          <div id="parcel-details" hidden>
+            <p class="parcel-id" id="detail-number"></p>
+            <dl>
+              <div>
+                <dt>Расстояние от границы исходного участка</dt>
+                <dd><span id="detail-distance"></span><small id="detail-distance-status" hidden></small></dd>
+              </div>
+              <div><dt>Категория земель</dt><dd id="detail-category"></dd></div>
+              <div><dt>Вид разрешённого использования</dt><dd id="detail-use"></dd></div>
+              <div><dt>Площадь</dt><dd id="detail-area"></dd></div>
+              <div><dt>Адрес или местоположение</dt><dd id="detail-address"></dd></div>
+              <div><dt>Статус геометрии</dt><dd id="detail-geometry"></dd></div>
+            </dl>
+          </div>
+        </section>
+      </aside>
+    </div>
+    <footer>Кадастровые сведения и контуры — НСПД.</footer>
+  </main>
+</body>
+</html>

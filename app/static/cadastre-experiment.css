@@ -1,0 +1,178 @@
+:root {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: #17382f;
+  background: #f4f5ef;
+  font-synthesis: none;
+  --green: #216449;
+  --line: #dce3d9;
+  --muted: #586e64;
+  --settlement: #e6a650;
+  --industrial: #a688c8;
+  --agricultural: #83ab54;
+  --other: #62a9bd;
+  --unknown: #8c969d;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+a { color: inherit; text-underline-offset: 4px; }
+button, input { font: inherit; }
+:focus-visible { outline: 3px solid #287eab; outline-offset: 3px; }
+.site-header { background: #183e34; color: #f4f7ed; }
+.header-inner {
+  max-width: 1600px;
+  margin: auto;
+  min-height: 62px;
+  padding: 12px 36px;
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+}
+.header-inner a { font-size: .85rem; }
+.header-links { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px 20px; }
+.basemap-credit { display: grid; text-align: right; font-size: .75rem; line-height: 1.4; }
+.basemap-credit > span { grid-area: 1 / 1; align-self: center; }
+.basemap-credit [aria-hidden="true"] { visibility: hidden; }
+.basemap-credit a { font-size: inherit; }
+.brand { font-size: 1.15rem; font-weight: 720; letter-spacing: .035em; }
+main { width: 100%; max-width: 1600px; margin: 0 auto; padding: 24px 36px 16px; overflow-y: auto; }
+.heading { margin: 0 0 20px; }
+h1 { margin: 0 0 7px; font-size: clamp(1.75rem, 2.5vw, 2.45rem); letter-spacing: -.04em; line-height: 1.12; }
+.heading p { margin: 0; color: var(--muted); font-size: .92rem; line-height: 1.55; }
+.search-panel {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+}
+.number-field { min-width: min(100%, 260px); }
+.number-field label { display: block; margin-bottom: 6px; font-size: .8rem; font-weight: 650; }
+.number-field input {
+  display: block;
+  width: 100%;
+  padding: 0 12px;
+  height: 42px;
+  border: 1px solid #c9d7ce;
+  border-radius: 7px;
+  color: #17382f;
+  background: #fafbf8;
+  font-variant-numeric: tabular-nums;
+}
+button { min-height: 42px; padding: 0 14px; border: 1px solid transparent; border-radius: 7px; font-size: .875rem; font-weight: 650; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.primary { background: var(--green); color: #fff; }
+.primary:hover:not(:disabled) { background: #184c38; }
+.secondary { background: #edf3ee; color: #23513d; border-color: #cddbcf; }
+.secondary:hover:not(:disabled) { background: #dce9de; }
+.status { min-height: 1.4em; margin: 9px 2px 12px; color: var(--muted); font-size: .83rem; line-height: 1.45; }
+.status.error { color: #9a342b; font-weight: 600; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(255px, 295px); gap: 14px; align-items: start; }
+.map-panel, .sidebar { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+.map-toolbar { display: flex; gap: 12px 23px; flex-wrap: wrap; align-items: center; padding: 12px 15px; }
+#basemap-control .leaflet-control-layers {
+  float: none; margin: 0; padding: 3px; border: 1px solid var(--line); border-radius: 7px;
+  box-shadow: none; background: #f3f6f0; color: #17382f; font: inherit;
+}
+#basemap-control .leaflet-control-layers-base { display: flex; flex-wrap: wrap; gap: 3px; }
+#basemap-control .leaflet-control-layers-base label > span {
+  display: flex; align-items: center; gap: 5px; padding: 4px 7px; cursor: pointer;
+  font-size: .8rem; font-weight: 650; white-space: nowrap;
+}
+#basemap-control .leaflet-control-layers-selector { top: 0; margin: 0; accent-color: var(--green); }
+.switch { display: inline-flex; align-items: center; gap: 8px; font-size: .82rem; font-weight: 600; cursor: pointer; }
+.switch input { width: 17px; height: 17px; margin: 0; accent-color: var(--green); cursor: pointer; }
+.map-surface { position: relative; isolation: isolate; }
+#cadastre-map { height: clamp(430px, calc(100dvh - 422px), 850px); background: #e5eae3; }
+.parcel-label {
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  background: #fffffff2;
+  color: #16332a;
+  font: 600 11px/1 "Segoe UI", system-ui, sans-serif;
+  white-space: nowrap;
+  box-shadow: 0 0 0 1px #17382f33;
+}
+.tile-status {
+  margin: 0 15px 11px;
+  border: 1px solid #dfd3ae; border-radius: 5px; background: #fff8e3; color: #6b5428; padding: 5px 8px; font-size: .75rem;
+}
+.tile-status button { min-height: 28px; margin-inline-start: 6px; padding: 0 7px; font-size: inherit; }
+.esri-credit {
+  padding: 5px 15px;
+  border-bottom: 1px solid var(--line);
+  background: #f7faf7;
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.4;
+}
+.map-legend { display: flex; flex-wrap: wrap; gap: 8px 19px; padding: 11px 15px; color: var(--muted); font-size: .76rem; }
+.category-legend { border-top: 1px solid var(--line); }
+.map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.symbol { width: 17px; height: 0; border-top: 2px solid; }
+.symbol.source { color: #9333EA; border-width: 5px; }
+.symbol.parcels { color: #20B7ED; border-width: 2.5px; }
+.symbol.selected { color: #0284C7; border-width: 5px; }
+.symbol.buffer { color: #1760bd; border-top-style: dashed; }
+.swatch { width: 11px; height: 11px; border-radius: 2px; background: var(--swatch); }
+.settlement { --swatch: var(--settlement); }
+.industrial { --swatch: var(--industrial); }
+.agricultural { --swatch: var(--agricultural); }
+.other { --swatch: var(--other); }
+.unknown { --swatch: var(--unknown); }
+.summary { background: #eaf2e9; padding: 16px; border-bottom: 1px solid var(--line); }
+.summary-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.summary h2, .coordinates h2, .details h2 { margin: 0; font-size: .95rem; }
+#parcel-count { color: var(--green); font-size: 1.9rem; line-height: 1; font-variant-numeric: tabular-nums; font-weight: 700; }
+.summary p, #detail-empty { margin: 10px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.coordinates { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.coordinate-readouts { margin: 8px 0 10px; }
+.coordinate-readouts div { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; padding: 3px 0; border: 0; }
+.coordinate-readouts dt { margin: 0; }
+.coordinate-readouts output { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.coordinate-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.coordinate-fields label { min-width: 0; color: var(--muted); font-size: .75rem; }
+.coordinate-fields input {
+  display: block; width: 100%; margin-top: 3px; padding: 6px; border: 1px solid #c9d7ce;
+  border-radius: 5px; color: #17382f; background: #fafbf8; font-variant-numeric: tabular-nums;
+}
+.coordinate-fields input[aria-invalid="true"] { border-color: #a84536; }
+.coordinate-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.coordinate-actions button { min-height: 34px; padding: 0 7px; font-size: .72rem; }
+.coordinate-status { margin: 6px 0 0; color: var(--muted); line-height: 1.45; font-size: .75rem; }
+.coordinate-status.error { color: #9a342b; }
+.details { padding: 17px 16px; }
+.parcel-id { margin: 9px 0 12px; font-variant-numeric: tabular-nums; font-weight: 710; font-size: 1.03rem; overflow-wrap: anywhere; }
+#detail-distance { font-weight: 650; }
+#detail-distance-status { display: block; margin-top: 3px; color: var(--muted); font-size: .75rem; }
+.leaflet-tooltip.measurement-label { z-index: 300; color: #991b1b; border: 1px solid #dc2626; font-weight: 700; }
+#cadastre-map .leaflet-control-scale { margin: 0 0 11px 11px; }
+#cadastre-map .leaflet-control-scale-line {
+  padding: 4px 6px 3px; background: #fffffff2; border-color: #263730; color: #17382f;
+  font: 650 .75rem/1 "Segoe UI", system-ui, sans-serif; text-shadow: none;
+}
+dl { margin: 0; }
+dl div { padding: 9px 0; border-top: 1px solid #e8ece6; }
+dl div:last-child { padding-bottom: 0; }
+dt { margin-bottom: 3px; color: var(--muted); font-size: .75rem; }
+dd { margin: 0; font-size: .83rem; line-height: 1.45; overflow-wrap: anywhere; }
+footer { margin-top: 12px; color: var(--muted); font-size: .75rem; }
+
+@media (max-width: 780px) {
+  .header-inner, main { padding-left: 16px; padding-right: 16px; }
+  .workspace { grid-template-columns: 1fr; }
+  #cadastre-map { height: max(375px, 54dvh); }
+}
+@media (max-width: 430px) {
+  .header-inner { gap: 10px; }
+  .header-inner a { font-size: .75rem; }
+  .search-panel { padding: 12px; gap: 8px; }
+  .number-field { flex-basis: 100%; }
+  .search-panel button { flex-grow: 1; padding: 0 8px; }
+}

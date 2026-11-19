@@ -1,0 +1,27 @@
+sequenceDiagram
+    actor U as Пользователь
+    participant UI as osm.js
+    participant API as app.main
+    participant Cache as CachedService
+    participant O as Overpass
+    U->>UI: Загрузить объекты OSM
+    alt Свежая запись в памяти для точки и радиуса
+        UI->>UI: Использовать набор, применить фильтры
+    else Нет свежей записи
+        UI->>API: POST /api/research
+        API->>Cache: Запрос по URL и Overpass QL
+        alt Дисковый кеш актуален
+            Cache-->>API: Сырые elements и метаданные
+        else Cache miss
+            Cache->>O: POST form data, out body geom
+            O-->>Cache: elements или ошибка
+            Cache-->>API: Записать и вернуть валидный ответ либо ServiceError
+        end
+        API->>API: Классификация, геометрия, ближайшая точка, отсечение
+        API-->>UI: FeatureCollection с metadata либо HTTP-ошибка
+        UI->>UI: Сверить ключ, применить фильтры и обновить слой
+    end
+    opt Явный экспорт
+        U->>UI: CSV или GeoJSON
+        UI-->>U: Blob из отфильтрованных объектов
+    end

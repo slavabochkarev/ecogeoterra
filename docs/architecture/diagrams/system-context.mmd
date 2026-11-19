@@ -1,0 +1,11 @@
+flowchart LR
+    U["Пользователь"] --> UI["Браузер: Map First / старые страницы"]
+    UI -->|HTTP JSON, same origin| API["FastAPI"]
+    API -->|HTTPS, поиск и пересечение| NSPD["НСПД"]
+    API -->|HTTPS, запрос Overpass QL| OVER["Overpass / данные OpenStreetMap"]
+    API -->|HTTPS, поиск адреса| NOM["Nominatim / данные OpenStreetMap"]
+    UI -->|HTTPS, растровые тайлы| TILE["OpenStreetMap Tiles"]
+    UI -->|HTTPS, метаданные и тайлы| ESRI["Esri World Imagery"]
+    API --- CACHE[("Дисковый кеш поставщиков")]
+    API --- STORE[("Локальные исследования JSON")]
+    UI -->|Blob: CSV, GeoJSON, Markdown| U

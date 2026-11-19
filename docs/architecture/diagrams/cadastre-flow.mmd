@@ -1,0 +1,33 @@
+sequenceDiagram
+    actor U as Пользователь
+    participant UI as cadastre.js
+    participant API as CadastreResearch
+    participant Cache as Кеш НСПД
+    participant N as НСПД
+    U->>UI: Исследовать выбранный радиус от исходного участка
+    UI->>API: POST /api/cadastre/research
+    API->>API: Проверить допуск, бюджеты и общий lock
+    API->>Cache: Получить исходный контур
+    opt Исходный контур отсутствует в кеше
+        API->>N: GET поиск по кадастровому номеру
+        N-->>API: Площадной контур
+    end
+    API->>Cache: Проверить выборку по ревизии и радиусу
+    alt Выборка найдена по актуальному ключу
+        Cache-->>API: Результат с cache_hit
+        API-->>UI: Сохранённая выборка
+    else Требуется пространственный запрос
+        API->>API: AEQD -> buffer от всей геометрии -> WGS 84
+        API->>N: POST intersects c fullObject
+        N-->>API: Коллекция или отказ
+        alt Коллекция прошла проверки
+            API->>API: Пересечение в AEQD, дедупликация, расстояния
+            opt Coverage unknown
+                API->>Cache: Записать нормализованный результат
+            end
+            API-->>UI: GeoJSON, фактический радиус, coverage
+        else Ошибка или явное усечение
+            API-->>UI: HTTP-ошибка и код
+        end
+    end
+    UI->>UI: Принять только результат текущего поколения

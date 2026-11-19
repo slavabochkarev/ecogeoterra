@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ЭкоГеоТерра · Карта</title>
+  <link rel="stylesheet" href="/static/vendor/leaflet.css">
+  <link rel="stylesheet" href="/static/map-first/map.css">
+  <script src="/static/vendor/leaflet.js" defer></script>
+  <script src="/static/vendor/esri-leaflet.js" defer></script>
+  <script src="/static/cadastre-esri.js" defer></script>
+  <script src="/static/map-first/main.js" type="module"></script>
+</head>
+<body>
+  <main id="workspace">
+    <div class="map-plane">
+      <div id="map" aria-label="Интерактивная карта"></div>
+      <footer id="map-attributions" aria-label="Источники карты">
+        <div class="map-credit" id="osm-credit">
+          <span id="osm-credit-use"></span>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
+        </div>
+      </footer>
+    </div>
+
+    <header class="toolbar surface" id="toolbar">
+      <h1 class="brand"><span class="brand-mark" aria-hidden="true">◇</span><span class="brand-name">ЭкоГеоТерра</span></h1>
+      <div class="study-tools" id="study-tools">
+        <button type="button" class="button outlined study-toggle" id="study-toggle"
+                aria-expanded="false" aria-controls="study-actions">Исследования
+          <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="m2.5 4.5 3.5 3 3.5-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <span class="study-name" id="study-name" hidden></span>
+        <span class="study-indicator" id="study-indicator" aria-hidden="true" hidden></span>
+        <button type="button" class="button study-alert" id="study-alert" aria-label="Сообщение об исследовании"
+                aria-haspopup="dialog" hidden><span aria-hidden="true">!</span></button>
+        <span id="study-status" class="visually-hidden" role="status"></span>
+        <div class="study-actions surface" id="study-actions" role="group" aria-label="Действия с исследованиями" hidden>
+          <button type="button" class="button" id="study-continue" hidden>Продолжить исследование</button>
+          <button type="button" class="button" id="study-new">Новое исследование</button>
+          <button type="button" class="button" id="study-open" aria-haspopup="dialog">Открыть сохранённое</button>
+          <button type="button" class="button" id="study-reports" aria-haspopup="dialog">Отчёты</button>
+          <button type="button" class="button" id="study-rename" aria-haspopup="dialog" disabled>Переименовать</button>
+          <button type="button" class="button" id="study-save" disabled>Сохранить сейчас</button>
+          <button type="button" class="button" id="study-close" disabled>Закрыть исследование</button>
+        </div>
+      </div>
+      <form class="search" id="cadastre-search" aria-label="Универсальный поиск">
+        <input type="search" id="cadastre-number" name="query" aria-label="Адрес, координаты или кадастровый номер"
+               aria-describedby="search-note" placeholder="Адрес, координаты или кадастровый номер" maxlength="500"
+               title="Координаты вводятся как широта, долгота" autocomplete="off" spellcheck="false" disabled>
+        <button type="submit" class="button" id="find-parcel" disabled>Найти</button>
+      </form>
+      <div class="research">
+        <select id="radius" aria-label="Радиус исследования" aria-describedby="radius-availability applied-radius">
+          <option value="500" selected>500 м</option>
+          <option value="1000" disabled>1000 м</option>
+          <option value="2000" disabled>2000 м</option>
+        </select>
+        <button type="button" class="button primary" id="research-cadastre" aria-describedby="radius-availability applied-radius" disabled>Исследовать</button>
+      </div>
+      <div class="view-tools">
+        <button type="button" class="button" id="show-panel" aria-label="Панель сведений" title="Сведения"
+                aria-controls="details" aria-expanded="false">
+          <span class="icon" aria-hidden="true">▥</span><span class="desktop-label">Сведения</span>
+        </button>
+        <button type="button" class="button" id="show-map" aria-label="Вся карта" title="Вся карта">
+          <span class="icon" aria-hidden="true">⛶</span><span class="desktop-label">Вся карта</span>
+        </button>
+      </div>
+      <span class="visually-hidden" id="search-note">Координаты вводятся как широта, долгота.</span>
+      <span class="visually-hidden" id="radius-availability">Доступный радиус исследования — 500 м.</span>
+    </header>
+
+    <div class="map-tools">
+      <div class="basemaps surface" role="group" aria-label="Подложка">
+        <button type="button" class="button" id="base-osm" aria-pressed="true">Карта</button>
+        <button type="button" class="button" id="base-esri" aria-pressed="false" disabled>Спутник</button>
+      </div>
+      <button type="button" class="button surface" id="show-layers" aria-controls="layers" aria-expanded="false">
+        Слои <span class="count" id="layer-count" aria-label="Активных слоёв: 2">2</span>
+      </button>
+      <section class="layer-popup surface" id="layers" aria-label="Информационные слои" hidden>
+        <label><input type="checkbox" name="boundaries" checked disabled>Кадастровые границы</label>
+        <label><input type="checkbox" name="labels" checked disabled aria-describedby="cadastre-layer-note">Кадастровые номера</label>
+        <label><input type="checkbox" name="fill" disabled aria-describedby="cadastre-layer-note">Заливка по категориям земель</label>
+        <p id="cadastre-layer-note" hidden>Включите границы, чтобы показать номера и заливку.</p>
+        <label><input type="checkbox" name="osm">Объекты карты (OSM)</label>
+      </section>
+    </div>
+
+    <div class="map-notices">
+      <output class="map-status surface cadastre-radius" id="applied-radius" hidden></output>
+      <p class="map-status surface cadastre-status" id="cadastre-status" role="status" hidden></p>
+      <div class="map-status surface" id="tile-status" hidden>
+        <p id="tile-message" role="status"></p>
+        <button type="button" class="button" id="back-to-osm" hidden>К карте</button>
+      </div>
+      <p class="map-status surface" id="startup-status" role="alert" hidden></p>
+    </div>
+
+    <div class="zoom surface" role="group" aria-label="Масштаб карты">
+      <button type="button" class="button icon" id="zoom-in" aria-label="Увеличить масштаб">+</button>
+      <button type="button" class="button icon" id="zoom-out" aria-label="Уменьшить масштаб">−</button>
+    </div>
+    <details class="map-legend surface" id="cadastre-legend" hidden>
+      <summary>Легенда</summary>
+      <ul class="cadastre-categories" id="cadastre-legend-entries" aria-label="Категории земель"></ul>
+    </details>
+    <button type="button" class="button surface exit" id="exit-map" aria-label="Выйти из режима Вся карта" hidden>
+      <span class="icon" aria-hidden="true">⛶</span><span class="desktop-label">Выйти</span>
+    </button>
+
+    <aside class="details surface" id="details" aria-label="Сведения" hidden>
+      <div class="details-header">
+        <div class="tabs" role="tablist" aria-label="Вкладки сведений">
+          <button type="button" class="button" id="cadastre-tab" role="tab" aria-controls="cadastre" aria-selected="true">Кадастр</button>
+          <button type="button" class="button" id="objects-tab" role="tab" aria-controls="objects" aria-selected="false" tabindex="-1">Объекты</button>
+          <button type="button" class="button" id="coordinates-tab" role="tab" aria-controls="coordinates" aria-selected="false" tabindex="-1">Координаты</button>
+        </div>
+        <button type="button" class="button icon" id="close-panel" aria-label="Свернуть сведения">×</button>
+      </div>
+      <div class="details-content" id="cadastre" role="tabpanel" aria-labelledby="cadastre-tab" tabindex="0">
+        <section>
+          <h2>Исходный участок</h2>
+          <p id="source-empty">Участок пока не задан.</p>
+          <details id="source-parcel" class="cadastre-disclosure" open hidden>
+            <summary id="source-number"></summary>
+            <dl id="source-fields" class="cadastre-fields"></dl>
+          </details>
+        </section>
+        <section>
+          <h2>Результаты исследования</h2>
+          <p id="research-attempt" class="cadastre-coverage" role="status" hidden></p>
+          <p id="research-empty">Найдите исходный участок и запустите исследование.</p>
+          <div id="research-results" hidden>
+            <dl id="research-summary" class="cadastre-fields"></dl>
+            <p id="research-coverage" class="cadastre-coverage"></p>
+            <ul id="research-warnings" class="cadastre-warnings" hidden></ul>
+            <details class="cadastre-disclosure">
+              <summary>Категории земель</summary>
+              <ul id="category-summary" class="cadastre-categories"></ul>
+            </details>
+            <details class="cadastre-disclosure" id="neighbor-section">
+              <summary>Соседние участки <span id="neighbor-count"></span></summary>
+              <ul id="parcel-list" class="parcel-list" aria-label="Соседние участки"></ul>
+              <button type="button" class="button outlined" id="show-more-parcels" hidden>Показать ещё</button>
+            </details>
+          </div>
+        </section>
+        <section>
+          <h2>Выбранный участок</h2>
+          <p id="selected-empty">Участок не выбран.</p>
+          <div id="selected-parcel" hidden>
+            <p class="cadastre-number"><strong id="selected-number"></strong></p>
+            <p id="selected-distance" class="cadastre-distance"></p>
+            <p id="selected-relation" class="cadastre-relation"></p>
+            <dl id="selected-fields" class="cadastre-fields"></dl>
+          </div>
+        </section>
+      </div>
+      <div class="details-content" id="objects" role="tabpanel" aria-labelledby="objects-tab" tabindex="0" hidden>
+        <section>
+          <h2>Объекты карты (OSM)</h2>
+          <p id="osm-origin">Задайте точку поиском или найдите исходный кадастровый участок.</p>
+          <div class="osm-actions">
+            <select id="osm-radius" aria-label="Радиус OSM от опорной точки">
+              <option value="500">500 м</option><option value="1000">1000 м</option><option value="2000" selected>2000 м</option>
+            </select>
+            <button type="button" class="button primary" id="osm-load" disabled>Загрузить объекты OSM</button>
+          </div>
+          <p class="osm-status" id="osm-status" role="status" hidden></p>
+        </section>
+        <section id="osm-results">
+          <h2>Выборка</h2>
+          <p id="osm-summary">Ожидает загрузки.</p>
+          <p class="osm-status" id="osm-mismatch" hidden></p>
+          <details class="cadastre-disclosure" id="osm-filters">
+            <summary>Категории и фильтры</summary>
+            <p class="osm-status" id="osm-category-status"></p>
+            <div id="osm-categories" class="osm-categories" role="group" aria-label="Категории OSM"></div>
+            <label class="osm-check"><input type="checkbox" id="osm-hide-unnamed">Скрыть объекты без названия</label>
+            <button type="button" class="button outlined" id="osm-reset">Показать все</button>
+          </details>
+          <ul id="osm-list" class="parcel-list osm-list" aria-label="Найденные объекты OSM"></ul>
+          <button type="button" class="button outlined" id="osm-more" hidden>Показать ещё</button>
+          <div class="osm-actions" aria-label="Экспорт отфильтрованной выборки">
+            <button type="button" class="button outlined" id="osm-export-geojson" disabled>GeoJSON</button>
+            <button type="button" class="button outlined" id="osm-export-csv" disabled>CSV</button>
+          </div>
+        </section>
+        <section id="osm-card" hidden aria-label="Выбранный объект OSM"></section>
+      </div>
+      <div class="details-content" id="coordinates" role="tabpanel" aria-labelledby="coordinates-tab" tabindex="0" hidden>
+        <section id="address-search-results" hidden>
+          <h2>Поиск адреса</h2>
+          <p id="address-status" class="location-status" role="status"></p>
+          <ul id="address-options" class="parcel-list location-options" aria-label="Варианты адреса" hidden></ul>
+        </section>
+        <section id="point-search" hidden>
+          <h2>Ориентир</h2>
+          <p id="location-address" hidden></p>
+          <p id="location-coordinates" class="location-coordinates"></p>
+          <button type="button" class="button outlined" id="find-near-point">Найти участок у точки</button>
+          <p id="point-status" class="location-status" role="status"></p>
+          <ul id="source-candidates" class="parcel-list location-options" aria-label="Кадастровые кандидаты" hidden></ul>
+          <div id="candidate-card" class="candidate-card" hidden>
+            <h2 id="candidate-number"></h2>
+            <p id="candidate-relation"></p>
+            <dl id="candidate-fields" class="cadastre-fields"></dl>
+            <button type="button" class="button primary" id="confirm-source" disabled>Выбрать исходным</button>
+          </div>
+        </section>
+        <section>
+          <h2>Координаты WGS 84</h2>
+          <dl class="coordinate-readouts">
+            <div><dt>Курсор</dt><dd><output id="cursor-coordinates" aria-live="off">—</output></dd></div>
+            <div><dt>Выбранная точка</dt><dd><output id="selected-coordinates">—</output></dd></div>
+          </dl>
+          <form id="coordinate-form" novalidate>
+            <div class="coordinate-fields">
+              <label for="latitude">Широта<input id="latitude" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
+              <label for="longitude">Долгота<input id="longitude" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
+            </div>
+            <div class="coordinate-actions">
+              <button type="submit" class="button primary">Перейти к координатам</button>
+              <button type="button" class="button outlined" id="copy-coordinates" disabled>Копировать</button>
+            </div>
+          </form>
+          <p id="coordinate-status" role="status" hidden></p>
+        </section>
+      </div>
+    </aside>
+    <noscript class="map-notices"><p class="map-status surface">Для работы карты включите JavaScript.</p></noscript>
+  </main>
+  <dialog id="study-dialog" class="surface research-dialog" aria-labelledby="study-dialog-title">
+    <div class="research-dialog-heading">
+      <h2 id="study-dialog-title">Открыть исследование</h2>
+      <form method="dialog"><button class="button icon" aria-label="Закрыть список">×</button></form>
+    </div>
+    <p id="study-list-status" role="status" hidden></p>
+    <ul id="study-list" class="parcel-list" aria-label="Сохранённые исследования"></ul>
+  </dialog>
+  <dialog id="study-rename-dialog" class="surface research-dialog" aria-labelledby="study-rename-heading">
+    <form id="study-rename-form">
+      <h2 id="study-rename-heading">Переименовать исследование</h2>
+      <label class="study-name-field" for="study-title">Название</label>
+      <input type="text" id="study-title" maxlength="600" required autofocus>
+      <div class="study-dialog-actions">
+        <button type="button" class="button outlined" id="study-rename-cancel">Отмена</button>
+        <button type="submit" class="button primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="study-alert-dialog" class="surface research-dialog" aria-labelledby="study-alert-heading">
+    <div class="research-dialog-heading">
+      <h2 id="study-alert-heading">Исследование</h2>
+      <form method="dialog"><button class="button icon" aria-label="Закрыть сообщение">×</button></form>
+    </div>
+    <p id="study-alert-message"></p>
+    <button type="button" class="button outlined" id="study-retry" hidden>Повторить сохранение</button>
+  </dialog>
+  <dialog id="land-reports" class="surface land-reports" aria-labelledby="land-reports-heading">
+    <div class="research-dialog-heading">
+      <h2 id="land-reports-heading">Отчёты по земельным участкам</h2>
+      <form method="dialog"><button class="button icon" aria-label="Закрыть отчёты" autofocus>×</button></form>
+    </div>
+    <dl id="land-report-meta" class="land-report-meta" hidden></dl>
+    <p id="land-report-status" role="status" hidden></p>
+    <p id="land-report-note" class="land-report-note" hidden></p>
+    <div id="land-report-actions" class="land-report-actions" hidden>
+      <div class="tabs" role="tablist" aria-label="Кадастровые отчёты">
+        <button type="button" class="button" id="land-all-tab" role="tab" aria-controls="land-all-panel" aria-selected="true">Все участки</button>
+        <button type="button" class="button" id="land-normalized-tab" role="tab" aria-controls="land-normalized-panel" aria-selected="false" tabindex="-1">Нормируемые земли</button>
+      </div>
+      <button type="button" class="button outlined" id="land-report-download">Скачать MD</button>
+    </div>
+    <section class="land-report-panel" id="land-all-panel" role="tabpanel" aria-labelledby="land-all-tab" tabindex="0" hidden></section>
+    <section class="land-report-panel" id="land-normalized-panel" role="tabpanel" aria-labelledby="land-normalized-tab" tabindex="0" hidden></section>
+  </dialog>
+</body>
+</html>
