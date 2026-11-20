@@ -10,7 +10,7 @@ function parseCoordinate(value) {
   return /^[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)$/.test(decimal) ? Number(decimal) : NaN;
 }
 
-export function installCoordinates(map, leaflet, element, onNavigate, changed) {
+export function installCoordinates(map, leaflet, element, onNavigate, changed, onSelect) {
   const cursor = element("cursor-coordinates");
   const latitude = element("latitude");
   const longitude = element("longitude");
@@ -40,14 +40,19 @@ export function installCoordinates(map, leaflet, element, onNavigate, changed) {
     changed();
   }
 
-  function goTo(lat, lon, showMarker = true) {
-    selectPoint(leaflet.latLng(lat, lon), showMarker);
+  function pick(value, showMarker, label) {
+    selectPoint(value, showMarker);
+    onSelect({ lat: point.lat, lon: point.lng, label });
+  }
+
+  function goTo(lat, lon, showMarker = true, label) {
+    pick(leaflet.latLng(lat, lon), showMarker, label);
     map.setView(point, Math.max(map.getZoom(), 15), { animate: false });
   }
 
   map.on("mousemove", ({ latlng }) => { cursor.textContent = formatCoordinates(latlng.wrap()); });
   map.getContainer().addEventListener("mouseleave", () => { cursor.textContent = "—"; });
-  map.on("click", ({ latlng }) => selectPoint(latlng));
+  map.on("click", ({ latlng }) => pick(latlng));
 
   element("coordinate-form").addEventListener("submit", event => {
     event.preventDefault();

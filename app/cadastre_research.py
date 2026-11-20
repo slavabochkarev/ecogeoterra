@@ -7,7 +7,7 @@ import json
 import logging
 import math
 import os
-from threading import Lock
+from threading import Event, Lock
 import time
 from typing import Literal
 from uuid import uuid4
@@ -74,12 +74,16 @@ class ResearchLimits:
 
 
 class ResearchBudget:
-    def __init__(self, limits):
+    def __init__(self, limits, *, strict=False):
         self.limits = limits
         self.max_response_bytes = limits.max_response_bytes
         self.deadline = time.monotonic() + limits.deadline_seconds
+        self.strict = strict
+        self.cancelled = Event()
 
     def remaining(self):
+        if self.cancelled.is_set():
+            raise NspdFailure("Кадастровое исследование отменено.", "cancelled")
         seconds = self.deadline - time.monotonic()
         if seconds <= 0:
             raise NspdFailure("Время исследования истекло. Повторите позже или уменьшите радиус.", "deadline_exceeded")
@@ -126,6 +130,27 @@ def source_revision(source):
     return hashlib.sha256(geometry.wkb + source["id"].encode("ascii")).hexdigest()
 
 
+def request_nspd(cadastre, budget, operation, *args, **kwargs):
+    """Apply the shared NSPD pause and cooldown while the caller holds the lock."""
+    delay = cadastre.next_allowed - time.monotonic()
+    if delay > UPSTREAM_INTERVAL:
+        seconds = math.ceil(delay)
+        raise NspdFailure(f"Дождитесь окончания ограничения НСПД. Повторите через {seconds} с.", "http_429", seconds)
+    if delay > 0:
+        if delay >= budget.remaining():
+            raise NspdFailure("Время ожидания запроса к НСПД истекло.", "deadline_exceeded")
+        budget.cancelled.wait(delay)
+    budget.check()
+    cooldown = UPSTREAM_INTERVAL
+    try:
+        return operation(*args, budget=budget, **kwargs)
+    except NspdFailure as exc:
+        cooldown = max(cooldown, exc.retry_after or 0)
+        raise
+    finally:
+        cadastre.next_allowed = time.monotonic() + cooldown
+
+
 class CadastreResearch:
     def __init__(self, experiment, limits=None):
         self.experiment = experiment
@@ -142,10 +167,10 @@ class CadastreResearch:
             for radius in RADII
         ]}
 
-    def execute(self, payload):
+    def execute(self, payload, budget=None):
         if payload.radius_m not in self.limits.enabled_radii:
             raise NspdFailure("Этот радиус выключен на сервере. Выберите доступный радиус.", "radius_disabled")
-        budget = ResearchBudget(self.limits)
+        budget = budget or ResearchBudget(self.limits, strict=payload.radius_m == 2000)
         key = (payload.number, payload.radius_m, payload.source_revision)
         with self.flights_lock:
             flight = self.flights.get(key)
@@ -156,7 +181,12 @@ class CadastreResearch:
                 flight = self.flights[key] = Future()
         if not leader:
             try:
-                return flight.result(timeout=budget.remaining())
+                while True:
+                    try:
+                        return flight.result(timeout=min(0.2, budget.remaining()) if budget.strict else budget.remaining())
+                    except TimeoutError:
+                        if not budget.strict or flight.done():
+                            raise
             except TimeoutError as exc:
                 raise NspdFailure("Время ожидания исследования истекло.", "deadline_exceeded") from exc
 
@@ -165,6 +195,7 @@ class CadastreResearch:
                 raise NspdFailure("Кадастровый сервис занят. Повторите позже.", "busy")
             try:
                 response = self._research(payload, budget)
+                budget.check()
             finally:
                 self.cadastre.lock.release()
             flight.set_result(response)
@@ -177,23 +208,7 @@ class CadastreResearch:
                 del self.flights[key]
 
     def _upstream(self, budget, operation, *args, **kwargs):
-        delay = self.cadastre.next_allowed - time.monotonic()
-        if delay > UPSTREAM_INTERVAL:
-            seconds = math.ceil(delay)
-            raise NspdFailure(f"Дождитесь окончания ограничения НСПД. Повторите через {seconds} с.", "http_429", seconds)
-        if delay > 0:
-            if delay >= budget.remaining():
-                raise NspdFailure("Время ожидания запроса к НСПД истекло.", "deadline_exceeded")
-            time.sleep(delay)
-        budget.check()
-        cooldown = UPSTREAM_INTERVAL
-        try:
-            return operation(*args, budget=budget, **kwargs)
-        except NspdFailure as exc:
-            cooldown = max(cooldown, exc.retry_after or 0)
-            raise
-        finally:
-            self.cadastre.next_allowed = time.monotonic() + cooldown
+        return request_nspd(self.cadastre, budget, operation, *args, **kwargs)
 
     def _cache_path(self, number, radius, revision):
         key = [RESEARCH_SCHEMA, NSPD_ENDPOINT, LAND_INTERSECTS_PATH, LAND_CATEGORY, "fullObject",
@@ -215,11 +230,18 @@ class CadastreResearch:
                 return None
             budget.check()
             result = json.loads(body)
-            if result["radius_m"] != radius or result["source_revision"] != revision or result["coverage"] not in ("unknown", "complete"):
+            if (result["radius_m"] != radius or result["source_revision"] != revision or
+                    source_revision(result["source"]) != revision or
+                    result["coverage"] not in ("unknown", "complete")):
                 return None
+            if result["coverage"] == "complete":
+                # No stored cache entry contains independent proof of NSPD coverage.
+                result["coverage"] = "unknown"
+                result["coverage_details"] = {"reason": "provider_coverage_unverified",
+                                              "confirmed": False, "records_skipped": 0}
             result["cache_hit"] = True
             return self._encode_result(result, budget)
-        except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        except (OSError, *GEOMETRY_ERRORS, RecursionError):
             return None
 
     def _write_cache(self, path, body, budget):

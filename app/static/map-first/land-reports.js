@@ -10,7 +10,11 @@ const classification = {
   review: "Требует проверки",
 };
 const reviewNote = "«Требует проверки» означает, что по исходному ВРИ нельзя однозначно выбрать группу. Причина указана в строке.";
-const coverage = { complete: "Полнота подтверждена", unknown: "Полнота выдачи НСПД не подтверждена", partial: "Неполная выборка" };
+const coverage = {
+  complete: "Полнота выдачи НСПД не подтверждена",
+  unknown: "Полнота выдачи НСПД не подтверждена",
+  partial: "Неполная выборка",
+};
 const distanceFormat = new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false });
 const dateFormat = new Intl.DateTimeFormat("ru-RU", {
   dateStyle: "short", timeStyle: "medium", timeZone: "UTC",
@@ -22,13 +26,16 @@ function date(value) {
 }
 
 function overview({ research, report }) {
-  return [
+  const metadata = [
     ["Исследование", research.title],
     ["Исходный участок", research.source_number ?? missing],
-    ["Радиус", report ? report.radius_m + " м" : missing],
-    ["Дата получения данных", date(report?.retrieved_at)],
-    ["Статус полноты", report ? coverage[report.coverage] : missing],
   ];
+  if (report) metadata.push(
+    ["Радиус", report.radius_m + " м"],
+    ["Дата получения данных", date(report.retrieved_at)],
+    ["Статус полноты", coverage[report.coverage]],
+  );
+  return metadata;
 }
 
 function columns(kind) {
@@ -142,20 +149,26 @@ function renderTable(panel, report, kind) {
   panel.append(table);
 }
 
-export function installLandReports(element) {
+export function installLandReports(element, retrySave) {
   const dialog = element("land-reports");
   const meta = element("land-report-meta");
   const status = element("land-report-status");
   const note = element("land-report-note");
+  const retry = element("land-report-retry");
   const actions = element("land-report-actions");
   const kinds = Object.keys(formats);
   const tabs = kinds.map(kind => element("land-" + kind + "-tab"));
   const panels = kinds.map(kind => element("land-" + kind + "-panel"));
   let current = 0;
+  let researchId;
   let data;
+  let readError;
   let loading;
+  let savedKey;
+  let saveState;
 
   function select(index, focus = false) {
+    if (!data?.report) return;
     current = index;
     tabs.forEach((tab, position) => {
       tab.setAttribute("aria-selected", String(position === current));
@@ -167,57 +180,90 @@ export function installLandReports(element) {
     if (focus) tabs[current].focus();
   }
 
-  function message(text) {
+  function renderStatus() {
+    const { pending, error } = saveState ?? {};
+    let text = "";
+    if (!researchId) text = "Откройте или создайте исследование и выполните кадастровое исследование.";
+    else if (error) text = error;
+    else if (pending) text = "Сохранение исследования…";
+    else if (loading) text = "Читаем сохранённую выборку…";
+    else if (readError) text = readError;
+    else if (!data?.report) text = "Кадастровое исследование ещё не выполнено. Выберите участок и нажмите «Исследовать».";
     status.textContent = text;
     status.hidden = !text;
+    retry.hidden = !error;
+    note.textContent = [
+      data?.report && (pending || loading || readError)
+        ? "Показана последняя загруженная сохранённая выборка." : "",
+      data?.report ? contourNote(data.report) : "",
+      readError && (pending || error) ? readError : "",
+    ].filter(Boolean).join(" ");
+    note.hidden = !note.textContent;
   }
 
-  async function open(researchId, hasUnsavedChanges) {
-    if (dialog.open) return;
-    data = undefined;
-    meta.hidden = note.hidden = actions.hidden = true;
+  function renderData(saved) {
+    data = saved;
+    meta.replaceChildren(...overview(saved).map(([label, value]) => {
+      const item = document.createElement("div");
+      const key = document.createElement("dt");
+      const detail = document.createElement("dd");
+      key.textContent = label;
+      detail.textContent = value;
+      item.append(key, detail);
+      return item;
+    }));
+    meta.hidden = false;
+    actions.hidden = !data.report;
     for (const panel of panels) {
       panel.replaceChildren();
       panel.hidden = true;
     }
-    message(researchId ? "Читаем сохранённую выборку…" : "Откройте или создайте исследование и выполните кадастровое исследование.");
-    dialog.showModal();
-    if (!researchId) return;
+    select(current);
+  }
+
+  async function readSaved() {
+    loading?.abort();
     const controller = new AbortController();
     loading = controller;
+    readError = "";
+    renderStatus();
     try {
       const saved = await request("/api/researches/" + encodeURIComponent(researchId) + "/reports",
         { cache: "no-store", signal: controller.signal });
-      if (!dialog.open || loading !== controller) return;
-      data = saved;
-      const items = overview(saved).map(([label, value]) => {
-        const item = document.createElement("div");
-        const key = document.createElement("dt");
-        const detail = document.createElement("dd");
-        key.textContent = label;
-        detail.textContent = value;
-        item.append(key, detail);
-        return item;
-      });
-      meta.replaceChildren(...items);
-      meta.hidden = false;
-      const notes = hasUnsavedChanges
-        ? ["Есть несохранённые изменения. Дождитесь подтверждения сохранения и откройте отчёты снова."]
-        : [];
-      if (saved.report && contourNote(saved.report)) notes.push(contourNote(saved.report));
-      note.textContent = notes.join(" ");
-      note.hidden = !notes.length;
-      if (!saved.report) {
-        message("Выполните кадастровое исследование и дождитесь сохранения выборки.");
-        return;
-      }
-      message("");
-      actions.hidden = false;
-      select(0);
+      if (dialog.open && loading === controller) renderData(saved);
     } catch (error) {
-      if (dialog.open && loading === controller && !controller.signal.aborted) message(error.message);
+      if (dialog.open && loading === controller && !controller.signal.aborted) readError = error.message;
     } finally {
-      if (loading === controller) loading = undefined;
+      if (loading === controller) {
+        loading = undefined;
+        if (dialog.open) renderStatus();
+      }
+    }
+  }
+
+  function open(id) {
+    if (dialog.open) return;
+    loading?.abort();
+    researchId = id;
+    current = 0;
+    data = readError = loading = savedKey = saveState = undefined;
+    meta.hidden = actions.hidden = true;
+    for (const panel of panels) {
+      panel.replaceChildren();
+      panel.hidden = true;
+    }
+    dialog.showModal();
+    renderStatus();
+  }
+
+  function sync(state) {
+    if (!dialog.open || !researchId) return;
+    saveState = state;
+    if (state.savedKey !== savedKey) {
+      savedKey = state.savedKey;
+      readSaved();
+    } else {
+      renderStatus();
     }
   }
 
@@ -240,6 +286,7 @@ export function installLandReports(element) {
   dialog.addEventListener("close", () => {
     if (!dialog.open) loading?.abort();
   });
+  retry.addEventListener("click", () => retrySave());
   element("land-report-download").addEventListener("click", () => download(data, kinds[current]));
-  return { open };
+  return { open, sync, isOpen: () => dialog.open };
 }

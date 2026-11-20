@@ -5,6 +5,8 @@ responses are retained so CRS and incomplete collections can be checked before
 pynspd's geometry validators erase the original CRS. Private API use is limited
 to overriding _build_client; upgrade only with the transport tests.
 """
+import asyncio
+from contextlib import suppress
 import hashlib
 import json
 import ssl
@@ -15,14 +17,16 @@ from pathlib import Path
 import httpx
 from pynspd import Nspd
 from pynspd.errors import PynspdResponseError
+from pynspd.map_types.enums import ThemeId
 from pynspd.schemas import (
-    Layer36048Feature, Layer36049Feature, Layer36328Feature, Layer36329Feature,
+    Layer36048Feature, Layer36049Feature, Layer36328Feature, Layer36329Feature, Layer875845Feature,
 )
 from shapely.geometry import mapping
 
 LAYERS = (Layer36048Feature, Layer36049Feature, Layer36328Feature, Layer36329Feature)
 CATEGORIES = {layer.layer_meta.category_id: layer.layer_meta.title for layer in LAYERS}
 LAND_CATEGORY = Layer36048Feature.layer_meta.category_id
+OOPT_CATEGORY = Layer875845Feature.layer_meta.category_id
 NSPD_ENDPOINT = str(Nspd.DNS_URL)
 LAND_INTERSECTS_PATH = "/api/geoportal/v1/intersects"
 NUMBER_SEARCH_PATH = "/api/geoportal/v2/search/geoportal"
@@ -69,6 +73,12 @@ class SecureNspd(Nspd):
                             timeout=httpx.Timeout(self._timeout, connect=5),
                             transport=httpx.HTTPTransport(verify=self.tls_context, retries=0),
                             trust_env=False, follow_redirects=False)
+
+    def _build_async_client(self):
+        return httpx.AsyncClient(base_url=self.DNS_URL, headers=self._get_headers(),
+                                 timeout=httpx.Timeout(self._timeout, connect=5),
+                                 transport=httpx.AsyncHTTPTransport(verify=self.tls_context, retries=0),
+                                 trust_env=False, follow_redirects=False)
 
 
 def collection(data, *, budget=None):
@@ -147,44 +157,81 @@ class NspdGateway:
                 raise NspdFailure("НСПД вернула ответ, который не является JSON.", "invalid_response") from exc
             time.sleep(.5)
 
+    @staticmethod
+    def _check_bounded_response(response, budget):
+        status = response.status_code
+        if status == 429:
+            value = response.headers.get("Retry-After", "60")
+            try:
+                pause = int(value)
+            except ValueError:
+                try:
+                    pause = int(parsedate_to_datetime(value).timestamp() - time.time()) + 1
+                except (ValueError, TypeError, OverflowError, OSError):
+                    pause = 60
+            pause = max(1, min(3600, pause))
+            raise NspdFailure(f"НСПД ограничила частоту запросов. Подождите {pause} с.", "http_429", pause)
+        if status == 403:
+            raise NspdFailure("НСПД ограничила доступ. Повторите позже.", "http_403")
+        if not response.is_success:
+            raise NspdFailure(f"НСПД недоступна: HTTP {status}. Повторите позже.", f"http_{status}")
+        encoding = response.headers.get("Content-Encoding", "identity").strip().lower()
+        if encoding not in ("", "identity"):
+            raise NspdFailure("НСПД вернула неподдерживаемое сжатие ответа.", "invalid_response")
+        length = response.headers.get("Content-Length", "")
+        if length.isdecimal() and int(length) > budget.max_response_bytes:
+            raise NspdFailure("Ответ НСПД превышает допустимый объём. Уменьшите радиус.", "response_budget_exceeded")
+
+    @staticmethod
+    def _append_chunk(body, chunk, budget):
+        budget.check()
+        if len(body) + len(chunk) > budget.max_response_bytes:
+            raise NspdFailure("Ответ НСПД превышает допустимый объём. Уменьшите радиус.", "response_budget_exceeded")
+        body.extend(chunk)
+
+    async def _strict_body(self, client, method, url, budget, **kwargs):
+        async def watch_cancellation(task):
+            while not budget.cancelled.is_set():
+                await asyncio.sleep(.1)
+            task.cancel()
+
+        watcher = asyncio.create_task(watch_cancellation(asyncio.current_task()))
+        try:
+            async with asyncio.timeout(budget.remaining()):
+                async with client:
+                    async with client.stream(method, url, **kwargs) as response:
+                        self._check_bounded_response(response, budget)
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            self._append_chunk(body, chunk, budget)
+                        return body
+        except asyncio.CancelledError:
+            budget.check()
+            raise
+        finally:
+            watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await watcher
+
     def _bounded_json(self, method, url, budget, **kwargs):
         timeout = min(self.timeout, budget.remaining())
-        headers = {**kwargs.pop("headers", {}), "Accept-Encoding": "identity"}
+        kwargs["headers"] = {**kwargs.pop("headers", {}), "Accept-Encoding": "identity"}
+        kwargs["timeout"] = httpx.Timeout(timeout, connect=min(5, timeout))
         try:
-            with SecureNspd(timeout, self.ca_file)._build_client() as client:
-                with client.stream(method, url, headers=headers,
-                                   timeout=httpx.Timeout(timeout, connect=min(5, timeout)), **kwargs) as response:
-                    status = response.status_code
-                    if status == 429:
-                        value = response.headers.get("Retry-After", "60")
-                        try:
-                            pause = int(value)
-                        except ValueError:
-                            try:
-                                pause = int(parsedate_to_datetime(value).timestamp() - time.time()) + 1
-                            except (ValueError, TypeError, OverflowError, OSError):
-                                pause = 60
-                        pause = max(1, min(3600, pause))
-                        raise NspdFailure(f"НСПД ограничила частоту запросов. Подождите {pause} с.", "http_429", pause)
-                    if status == 403:
-                        raise NspdFailure("НСПД ограничила доступ. Повторите позже.", "http_403")
-                    if not response.is_success:
-                        raise NspdFailure(f"НСПД недоступна: HTTP {status}. Повторите позже.", f"http_{status}")
-                    encoding = response.headers.get("Content-Encoding", "identity").strip().lower()
-                    if encoding not in ("", "identity"):
-                        raise NspdFailure("НСПД вернула неподдерживаемое сжатие ответа.", "invalid_response")
-                    length = response.headers.get("Content-Length", "")
-                    if length.isdecimal() and int(length) > budget.max_response_bytes:
-                        raise NspdFailure("Ответ НСПД превышает допустимый объём. Уменьшите радиус.", "response_budget_exceeded")
-                    body = bytearray()
-                    for chunk in response.iter_bytes():
-                        budget.check()
-                        if len(body) + len(chunk) > budget.max_response_bytes:
-                            raise NspdFailure("Ответ НСПД превышает допустимый объём. Уменьшите радиус.", "response_budget_exceeded")
-                        body.extend(chunk)
-                    budget.check()
-                    return json.loads(body)
-        except httpx.TimeoutException as exc:
+            nspd = SecureNspd(timeout, self.ca_file)
+            if getattr(budget, "strict", False):
+                budget.check()
+                body = asyncio.run(self._strict_body(nspd._build_async_client(), method, url, budget, **kwargs))
+            else:
+                with nspd._build_client() as client:
+                    with client.stream(method, url, **kwargs) as response:
+                        self._check_bounded_response(response, budget)
+                        body = bytearray()
+                        for chunk in response.iter_bytes():
+                            self._append_chunk(body, chunk, budget)
+            budget.check()
+            return json.loads(body)
+        except (TimeoutError, httpx.TimeoutException) as exc:
             raise NspdFailure("НСПД не ответила вовремя. Повторите позже.", "deadline_exceeded") from exc
         except httpx.TransportError as exc:
             if "CERTIFICATE_VERIFY_FAILED" in str(exc):
@@ -205,16 +252,22 @@ class NspdGateway:
                          params={"typeIntersect": "fullObject"}, json=self._intersects_payload(geometry, categories))
         return collection(raw)
 
+    def _bounded_intersects(self, geometry, categories, budget):
+        payload = json.dumps(self._intersects_payload(geometry, categories),
+                             separators=(",", ":"), allow_nan=False).encode("utf-8")
+        budget.check_request_bytes(len(payload))
+        raw = self._bounded_json("post", LAND_INTERSECTS_PATH, budget, params={"typeIntersect": "fullObject"},
+                                 content=payload, headers={"Content-Type": "application/json"})
+        return collection(raw, budget=budget)
+
     def search_land(self, geometry, *, budget=None):
         if budget is not None:
-            payload = json.dumps(self._intersects_payload(geometry, (LAND_CATEGORY,)),
-                                 separators=(",", ":"), allow_nan=False).encode("utf-8")
-            budget.check_request_bytes(len(payload))
-            raw = self._bounded_json("post", LAND_INTERSECTS_PATH, budget, params={"typeIntersect": "fullObject"},
-                                     content=payload, headers={"Content-Type": "application/json"})
-            return collection(raw, budget=budget)
+            return self._bounded_intersects(geometry, (LAND_CATEGORY,), budget)
         with SecureNspd(self.timeout, self.ca_file) as client:
             return self._intersects(client, geometry, (LAND_CATEGORY,), attempts=1)
+
+    def search_oopt(self, geometry, *, budget):
+        return self._bounded_intersects(geometry, (OOPT_CATEGORY,), budget)
 
     def search(self, geometry):
         with SecureNspd(self.timeout, self.ca_file) as client:
@@ -243,12 +296,18 @@ class NspdGateway:
     def by_number(self, number, *, land_only=False, budget=None):
         """Diagnostic/explicit-number lookup; never substitutes spatial matching."""
         scope = {"layersId": Layer36048Feature.layer_meta.layer_id} if land_only else {"thematicSearchId": 1}
-        params = {"query": number, **scope}
+        return self._number_search({"query": number, **scope}, budget=budget, attempts=1 if land_only else 2)
+
+    def search_oopt_details(self, number, *, budget):
+        return self._number_search({"query": number, "thematicSearchId": ThemeId.ZONES_AND_TERRITORIES.value},
+                                   budget=budget)
+
+    def _number_search(self, params, *, budget, attempts=1):
         if budget is not None:
             raw = self._bounded_json("get", NUMBER_SEARCH_PATH, budget, params=params)
         else:
             with SecureNspd(self.timeout, self.ca_file) as client:
-                raw = self._json(client, "get", NUMBER_SEARCH_PATH, attempts=1 if land_only else 2, params=params)
+                raw = self._json(client, "get", NUMBER_SEARCH_PATH, attempts=attempts, params=params)
         if not isinstance(raw, dict) or not isinstance(raw.get("meta"), (dict, list)):
             raise NspdFailure("Неполный ответ поиска по номеру.", "invalid_response")
         found = collection(raw.get("data"), budget=budget)

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import httpx
 
 from app.main import app
+from app.research_store import ResearchStore
 from app.services import CachedService, ServiceError
 
 
@@ -16,9 +17,42 @@ class APITests(unittest.TestCase):
         self.client = TestClient(app)
 
     def test_start_page_health_and_local_assets(self):
-        for path in ("/", "/api/health", "/api/config", "/static/app.js", "/static/vendor/leaflet.js"):
+        for path in ("/", "/map"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('src="/static/map-first/main.js"', response.text)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+        for path in ("/api/health", "/api/config", "/static/map-first/main.js", "/static/vendor/leaflet.js"):
             with self.subTest(path=path):
                 self.assertEqual(self.client.get(path).status_code, 200)
+        for path in ("/legacy/osm", "/legacy/cadastre-experiment", "/cadastre-experiment",
+                     "/static/app.js", "/static/cadastre-experiment.html", "/static/styles.css"):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.get(path).status_code, 404)
+        paths = self.client.get("/openapi.json").json()["paths"]
+        for path in ("/api/cadastre/enrich", "/api/cadastre-experiment/research"):
+            self.assertTrue(paths[path]["post"]["deprecated"])
+        self.assertEqual(self.client.get("/static/map-first/main.js").headers["Cache-Control"], "no-store")
+
+    def test_research_accepts_current_state_and_rejects_stale_revision(self):
+        with TemporaryDirectory() as directory, patch("app.research_api.store", ResearchStore(directory)):
+            created = self.client.post("/api/researches", json={"state": {"oopt_anchor": None}})
+            self.assertEqual(created.status_code, 201)
+            path = "/api/researches/" + created.json()["research"]["id"]
+            state = {"tab": "oopt", "oopt_anchor": "coordinates"}
+            invalid = self.client.put(path, json={"revision": 1, "state": {"oopt_anchor": "invalid"}})
+            self.assertEqual(invalid.status_code, 422)
+            self.assertIn("state.oopt_anchor", invalid.json()["detail"])
+            updated = self.client.put(path, json={"revision": 1, "state": state})
+            self.assertEqual(updated.status_code, 200)
+            self.assertEqual(updated.json()["research"]["revision"], 2)
+            self.assertEqual(self.client.put(path, json={"revision": 1, "state": {}}).status_code, 409)
+            self.assertEqual(self.client.post(path + "/close", json={"revision": 2}).status_code, 200)
+            restored = self.client.post(path + "/open").json()
+            self.assertIsNone(restored["cadastre"])
+            self.assertEqual(restored["research"]["state"]["tab"], "oopt")
+            self.assertEqual(restored["research"]["state"]["oopt_anchor"], "coordinates")
 
     def test_validation_prevents_network_requests(self):
         with patch("app.main.fetch_objects") as fetch:

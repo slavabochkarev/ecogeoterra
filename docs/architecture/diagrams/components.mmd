@@ -1,10 +1,8 @@
 flowchart LR
     subgraph Browser["Браузер"]
         MF["Map First: контроллеры и Leaflet"]
-        Legacy["v0.2 и кадастровый эксперимент"]
         Export["Экспорт: CSV / GeoJSON / MD"]
         MF --> Export
-        Legacy --> Export
     end
     subgraph Server["FastAPI, один процесс штатного запуска"]
         API["app.main"]
@@ -25,11 +23,9 @@ flowchart LR
         REPORT --> GEO
     end
     MF --> API
-    Legacy --> API
     CAD --- CACHE[("Кеш НСПД")]
     OSM --- OS_CACHE[("Кеш Nominatim и Overpass")]
     STORE --- FILES[("Хранилище JSON")]
     GATE --> NSPD["НСПД"]
     OSM --> PROVIDERS["Nominatim и Overpass"]
     MF --> TILES["Тайлы OSM и Esri"]
-    Legacy --> TILES

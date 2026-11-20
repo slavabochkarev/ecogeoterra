@@ -35,7 +35,7 @@ export function installSearch(map, leaflet, layers, element, cadastre, goTo, sho
     clearAddresses();
     showCoordinates();
     pointSearch.place(location);
-    goTo(location.lat, location.lon, false);
+    goTo(location.lat, location.lon, false, location.address);
     setOrigin({ lat: location.lat, lon: location.lon, label: location.address ?? "Координаты поиска",
       ...(location.address ? { address: location.address } : {}) });
     const panel = element("details");

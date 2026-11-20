@@ -46,14 +46,17 @@
 
 | Состояние `WorkingState` | Тип/по умолчанию |
 |---|---|
-| `camera`, `basemap`, `tab` | camera lat/lon/zoom, default 55/50/4; zoom 0–19, координаты ±90/±180. basemap osm/esri, default osm. tab cadastre/objects/coordinates, default cadastre. |
+| `camera`, `basemap`, `tab` | camera lat/lon/zoom, default 55/50/4; zoom 0–19, координаты ±90/±180. basemap osm/esri, default osm. tab cadastre/objects/oopt/coordinates, default cadastre. |
 | `panel_open,map_only`, `layers` | false/false, флаги boundaries/labels true, fill/osm false. |
 | `cadastre_radius,osm_radius` | Каждый 500/1000/2000, defaults 500/2000. Скачиваемые данные имеют собственный фактический радиус. |
 | `osm_categories,hide_unnamed` | Уникальный список известных категорий до 9 или null, default null; false для фильтра безымянных. |
 | `cadastre_selected,osm_selected` | Кадастровый номер или null; ключ `node/…`, `way/…`, `relation/…` или null. |
+| `oopt_anchor` | `cadastre`, `osm`, `coordinates` или null (по умолчанию). Указывает, из какого имеющегося выбора восстанавливать точку для вкладки «Исследование». |
 | `osm_origin,location,coordinates,query` | Две nullable точки lat/lon с необязательными label/address ≤1000, nullable точка с marker (default true), строка query до 500, default пустая. |
 
 Модели состояния и входов строгие и запрещают неизвестные поля. Значения по умолчанию отрабатывают для отсутствующих полей. `PUT` передаёт очередной снимок `state`, а не patch состояния.
+
+Выборка ООПТ и диаметр в манифесте не сохраняются. При открытии исследования восстанавливаются существующий выбор объекта и вкладка, а поиск ООПТ можно запустить снова с диаметром по умолчанию.
 
 | Файл | Структура и обязательность |
 |---|---|

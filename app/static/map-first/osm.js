@@ -10,7 +10,7 @@ const geometryTypes = new Set(["Point", "MultiPoint", "LineString", "MultiLineSt
 const resultKey = (point, radius) => JSON.stringify([point.lat, point.lon, radius]);
 const fresh = entry => Date.now() - entry.fetchedAt < cacheTtl;
 
-export function installOsm(map, leaflet, element, state, layers, showTab, cadastre, setAttribution, changed) {
+export function installOsm(map, leaflet, element, state, layers, showTab, cadastre, setAttribution, changed, onSelect) {
   const radius = element("osm-radius");
   const load = element("osm-load");
   const unnamed = element("osm-hide-unnamed");
@@ -85,6 +85,7 @@ export function installOsm(map, leaflet, element, state, layers, showTab, cadast
     if (selected) showTab("objects");
     renderer.select(selected, focus && Boolean(current()));
     panel.select(selected);
+    onSelect(selected);
     changed();
     if (selected) requestAnimationFrame(() => {
       const scroll = element("objects");
@@ -125,6 +126,7 @@ export function installOsm(map, leaflet, element, state, layers, showTab, cadast
     visible = (data?.features ?? []).filter(({ properties: p }) =>
       active.has(p.category) && (!unnamed.checked || p.has_name));
     if (!visible.includes(selected)) {
+      if (selected) onSelect(null);
       selected = undefined;
       panel.select();
     }
@@ -285,6 +287,7 @@ export function installOsm(map, leaflet, element, state, layers, showTab, cadast
 
   return {
     setOrigin, refreshVisibility, restore, ensureReady: getCategories, busy: () => busy,
+    selection: () => selected,
     snapshot: () => ({
       data: result?.data, requestedCategories, origin, radius: Number(radius.value), selectedId: selected?.id,
       categories: Object.keys(categories).length ? [...active] : null, hideUnnamed: unnamed.checked,

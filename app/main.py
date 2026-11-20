@@ -1,10 +1,13 @@
 from collections import Counter
 import os
 from pathlib import Path
+from shutil import copytree
 import sys
+from tempfile import TemporaryDirectory
 from typing import Literal
 from uuid import uuid4
 
+import anyio
 from fastapi import FastAPI, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -13,18 +16,32 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from shapely.errors import GEOSException
 from shapely.geometry import Point, mapping
+from starlette.concurrency import run_in_threadpool
 
 from .classification import CATEGORIES, classify
 from .cadastre import CadastreService, EnrichInput, EnrichResponse
 from .cadastre_experiment import CadastreExperiment, CadastralNumber, ExperimentInput, SourceCandidatesInput
-from .cadastre_research import CadastreResearch, CadastreResearchInput
+from .cadastre_research import CadastreResearch, CadastreResearchInput, ResearchBudget
 from .geo import MetricContext
 from .osm import GeometryError, element_geometry
 from .nspd import NspdFailure
+from .oopt import BOUNDARY_NUMBER, OoptInput, oopt_details, research_oopt
 from .research_api import router as research_router
 from .services import ServiceError, fetch_objects, geocode
 
 STATIC = Path(__file__).resolve().parent / "static"
+# The running backend and its frontend advance together on restart.
+_frontend_snapshot = TemporaryDirectory(prefix="ecogeoterra-frontend-")
+FRONTEND = copytree(STATIC, Path(_frontend_snapshot.name), dirs_exist_ok=True)
+
+
+class FrontendFiles(StaticFiles):
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 app = FastAPI(title="ЭкоГеоТерра v0.2", version="0.2.0")
 app.include_router(research_router)
 cadastre = CadastreService()
@@ -32,14 +49,9 @@ cadastre_experiment = CadastreExperiment(cadastre)
 cadastre_research = CadastreResearch(cadastre_experiment)
 
 
-@app.post("/api/cadastre/enrich", response_model=EnrichResponse)
+@app.post("/api/cadastre/enrich", response_model=EnrichResponse, deprecated=True)
 def enrich_cadastre(payload: EnrichInput):
     return cadastre.enrich(payload)
-
-
-@app.get("/cadastre-experiment")
-def cadastre_experiment_page():
-    return FileResponse(STATIC / "cadastre-experiment.html")
 
 
 def esri_api_key():
@@ -72,7 +84,7 @@ def experiment_source(number: CadastralNumber):
     return cadastre_experiment.execute(number)
 
 
-@app.post("/api/cadastre-experiment/research")
+@app.post("/api/cadastre-experiment/research", deprecated=True)
 def experiment_research(payload: ExperimentInput):
     return cadastre_experiment.execute(payload.number, research=True)
 
@@ -95,10 +107,49 @@ def research_error(status, code, message, *, retry_after=None):
     }, headers={"Retry-After": str(retry_after)} if retry_after else None)
 
 
-@app.post("/api/cadastre/research", response_class=JSONResponse)
-def research_cadastre(payload: CadastreResearchInput):
+async def research_2000(payload, request):
+    budget = ResearchBudget(cadastre_research.limits, strict=True)
+    body = None
+    disconnected = False
+
+    async def watch_disconnect(scope):
+        nonlocal disconnected
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+        disconnected = True
+        budget.cancelled.set()
+        scope.cancel()
+
     try:
-        return Response(cadastre_research.execute(payload), media_type="application/json")
+        with anyio.fail_after(budget.remaining()):
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(watch_disconnect, tasks.cancel_scope)
+                try:
+                    body = await anyio.to_thread.run_sync(cadastre_research.execute, payload, budget,
+                                                          abandon_on_cancel=True)
+                except NspdFailure as exc:
+                    body = exc
+                finally:
+                    tasks.cancel_scope.cancel()
+    except TimeoutError:
+        raise NspdFailure("Время исследования истекло. Повторите позже или уменьшите радиус.", "deadline_exceeded") from None
+    finally:
+        budget.cancelled.set()
+    if disconnected:
+        raise NspdFailure("Кадастровое исследование отменено.", "cancelled")
+    if isinstance(body, NspdFailure):
+        raise body
+    return body
+
+
+@app.post("/api/cadastre/research", response_class=JSONResponse)
+async def research_cadastre(payload: CadastreResearchInput, request: Request):
+    try:
+        if payload.radius_m == 2000 and 2000 in cadastre_research.limits.enabled_radii:
+            body = await research_2000(payload, request)
+        else:
+            body = await run_in_threadpool(cadastre_research.execute, payload)
+        return Response(body, media_type="application/json")
     except NspdFailure as exc:
         code = {"http_403": "upstream_forbidden", "http_429": "cooldown", "not_found": "source_not_found",
                 "connection_error": "upstream_unavailable", "tls_verification_failed": "tls_configuration"}.get(exc.code, exc.code)
@@ -107,7 +158,7 @@ def research_cadastre(payload: CadastreResearchInput):
         status = {"source_not_found": 404, "missing_contour": 422, "radius_disabled": 422,
                   "request_budget_exceeded": 422, "busy": 409, "source_changed": 409,
                   "upstream_forbidden": 403, "cooldown": 429, "tls_configuration": 503,
-                  "upstream_unavailable": 503, "deadline_exceeded": 504}.get(code, 502)
+                  "upstream_unavailable": 503, "deadline_exceeded": 504, "cancelled": 499}.get(code, 502)
         return research_error(status, code, str(exc), retry_after=exc.retry_after)
 
 
@@ -115,6 +166,8 @@ def research_cadastre(payload: CadastreResearchInput):
 async def research_validation_error(request: Request, exc: RequestValidationError):
     if request.scope.get("endpoint") is research_cadastre:
         return research_error(422, "invalid_input", "Укажите кадастровый номер и радиус 500, 1000 или 2000 м.")
+    if request.scope.get("endpoint") is oopt_research:
+        return research_error(422, "invalid_input", "Проверьте координаты и диаметр 10, 40, 100 или 200 км.")
     return await request_validation_exception_handler(request, exc)
 
 
@@ -196,14 +249,33 @@ def research(payload: ResearchInput):
     return analyze(payload, raw, cache)
 
 
-@app.get("/")
-def index():
-    return FileResponse(STATIC / "index.html")
+@app.post("/api/oopt/research")
+def oopt_research(payload: OoptInput):
+    try:
+        return research_oopt(payload, cadastre)
+    except NspdFailure as exc:
+        return oopt_error(exc)
+
+
+@app.get("/api/oopt/details")
+def oopt_card(number: str = Query(pattern=BOUNDARY_NUMBER, max_length=32)):
+    try:
+        return JSONResponse(oopt_details(number, cadastre), headers={"Cache-Control": "no-store"})
+    except NspdFailure as exc:
+        return oopt_error(exc)
+
+
+def oopt_error(exc):
+    status = {"busy": 409, "http_403": 403, "http_429": 429,
+              "tls_verification_failed": 503, "connection_error": 503,
+              "deadline_exceeded": 504}.get(exc.code, 502)
+    return research_error(status, exc.code, str(exc), retry_after=exc.retry_after)
 
 
 @app.get("/map")
+@app.get("/")
 def map_first_page():
-    return FileResponse(STATIC / "map-first" / "index.html")
+    return FileResponse(FRONTEND / "map-first" / "index.html", headers={"Cache-Control": "no-store"})
 
 
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.mount("/static", FrontendFiles(directory=FRONTEND), name="static")

@@ -1,5 +1,5 @@
 flowchart LR
-    U["Пользователь"] --> UI["Браузер: Map First / старые страницы"]
+    U["Пользователь"] --> UI["Браузер: Map First"]
     UI -->|HTTP JSON, same origin| API["FastAPI"]
     API -->|HTTPS, поиск и пересечение| NSPD["НСПД"]
     API -->|HTTPS, запрос Overpass QL| OVER["Overpass / данные OpenStreetMap"]

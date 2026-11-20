@@ -14,6 +14,18 @@ from .land_reports import build_reports
 
 router = APIRouter(prefix="/api/researches", tags=["researches"])
 store = ResearchStore()
+INVALID_RESEARCH = "Некорректная структура рабочего исследования."
+
+
+def validation_detail(exc: ValidationError):
+    error = exc.errors(include_url=False, include_context=False, include_input=False)[0]
+    if not error["loc"]:
+        return INVALID_RESEARCH
+    path = ".".join(str(part) if isinstance(part, int) or (part.isidentifier() and len(part) <= 40) else "?"
+                    for part in error["loc"][:8])
+    reason = {"extra_forbidden": "неизвестное поле", "missing": "обязательное поле"}.get(
+        error["type"], "недопустимое значение")
+    return f"{INVALID_RESEARCH} Поле {path}: {reason}."
 
 
 async def payload(request, model):
@@ -27,8 +39,10 @@ async def payload(request, model):
                 raise HTTPException(413, "Размер сохранения превышает допустимый.")
             body.extend(chunk)
         return await run_in_threadpool(model.model_validate_json, body)
+    except ValidationError as exc:
+        raise HTTPException(422, validation_detail(exc)) from exc
     except (ValueError, TypeError, RecursionError, ClientDisconnect) as exc:
-        raise HTTPException(422, "Некорректная структура рабочего исследования.") from exc
+        raise HTTPException(422, INVALID_RESEARCH) from exc
 
 
 def invoke(callback, *args, **kwargs):

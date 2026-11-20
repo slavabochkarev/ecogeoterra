@@ -27,6 +27,7 @@ cache/
 *.dbf
 *.kml
 *.kmz
+ecogeoterra-*.csv
 lands_all_*m.md
 lands_normalized_*m.md
 !/docs/CR-006/examples/lands_all_500m.md

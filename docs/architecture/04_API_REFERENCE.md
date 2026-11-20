@@ -13,9 +13,11 @@
 | `GET /api/cadastre-experiment/basemaps` | Нет | 200 `{esriApiKey:string/null}`, `Cache-Control:no-store`, CORP `same-origin` | `main.experiment_basemaps`, читает локальную конфигурацию браузерного Esri |
 | `GET /api/geocode` | Query `q:string`, 3–500 символов, после strip ≥3 | 200 `{results,cache}`, пустой список допустим. 422 вход, 429 пауза, 502 HTTP/формат, 504 таймаут. | `main.search_address` → `services.geocode` → Nominatim |
 | `POST /api/research` | JSON `ResearchInput`: конечные `lat:float` ±85, `lon:float` ±180, `radius:int` 500/1000/2000, default 2000 м, `source_label:string` до 1000, default «Точка предприятия» | 200 FeatureCollection с `metadata`; 422/429/502/504. Категории фильтруются в UI после ответа. | `main.research/analyze` → `services.fetch_objects` → Overpass |
-| `POST /api/cadastre/enrich` | `EnrichInput`: `osm_type` node/way/relation, строгий `osm_id:int>0`, `geometry:object\|null` или `coordinates:[lon,lat]\|null`, `tags:dict[str,str]` default {}. Геометрия приоритетна. | 200 `EnrichResponse` с `status` matched/multiple_matches/not_found/unavailable/error, `error_code/message` при отказе; 422 вход. Линия и площадной контур >10 км² дают unavailable до сети. | `main.enrich_cadastre` → `CadastreService.enrich` → НСПД; действие только в legacy UI |
+| `POST /api/oopt/research` | Строгие числовые координаты WGS 84 `lat` ±85,05112878, `lon` ±180, `diameter_km` 10/40/100/200, по умолчанию 40 | 200 с `center`, `diameter_km`, `radius_m`, `zones`, `coverage`, `legal_status`, `projection`, `source_crs`, `source`, `category`, `retrieved_at` и `warnings`. 403/409/422/429/502/503/504 при отказе. | `oopt.research_oopt` → `NspdGateway.search_oopt` → НСПД, категория 472825 |
+| `GET /api/oopt/details` | Query `number`, реестровый номер границы до 32 символов | 200 `{registry_number,details,retrieved_at}`, `details:null` при отсутствии точной дополнительной записи, `Cache-Control: no-store`. 403/409/422/429/502/503/504 при отказе. | `oopt.oopt_details` → `NspdGateway.search_oopt_details` → НСПД, тема 5 и категория записи 36948 |
+| `POST /api/cadastre/enrich` | `EnrichInput`: `osm_type` node/way/relation, строгий `osm_id:int>0`, `geometry:object\|null` или `coordinates:[lon,lat]\|null`, `tags:dict[str,str]` default {}. Геометрия приоритетна. | 200 `EnrichResponse` с `status` matched/multiple_matches/not_found/unavailable/error, `error_code/message` при отказе; 422 вход. Линия и площадной контур >10 км² дают unavailable до сети. | `main.enrich_cadastre` → `CadastreService.enrich` → НСПД; deprecated, для совместимости API |
 | `GET /api/cadastre-experiment/source` | Query `number:CadastralNumber` | 200 `{parcel,retrieved_at,cache_hit,warnings}`; 403/404/409/422/429/502/503, Retry-After при известной паузе | `main.experiment_source` → `CadastreExperiment.resolve_source` → НСПД |
-| `POST /api/cadastre-experiment/research` | `ExperimentInput`: только `number:CadastralNumber` | 200 источник, буфер, FeatureCollection соседей, счётчики, время и coverage; 403/404/409/422/429/502/503 | `main.experiment_research` → `CadastreExperiment.execute` → НСПД; фиксированные 500 м |
+| `POST /api/cadastre-experiment/research` | `ExperimentInput`: только `number:CadastralNumber` | 200 источник, буфер, FeatureCollection соседей, счётчики, время и coverage; 403/404/409/422/429/502/503 | `main.experiment_research` → `CadastreExperiment.execute` → НСПД; 500 м, deprecated |
 | `POST /api/cadastre/source-candidates` | `SourceCandidatesInput`: только строгие конечные числовые `lat` ±85 и `lon` ±180 | 200 `point,candidates,radius_m:15,retrieved_at,cache_hit,coverage,warnings`; 403/409/422/429/502/503. Небезопасный круг даёт 422. | `main.source_candidates` → `CadastreExperiment.find_source_candidates` → НСПД |
 | `GET /api/cadastre/capabilities` | Нет | 200 `{source_candidates:bool,radii:list[{radius_m,enabled,reason}]}`, флаги текущего процесса | `main.cadastre_capabilities`, `CadastreResearch.capabilities` |
 | `POST /api/cadastre/research` | `CadastreResearchInput`: только `number:CadastralNumber`, `radius_m` как JSON integer 500/1000/2000, опционально `source_revision` null или 64 строчных hex | 200 кадастровый результат с ревизией и `coverage_details`. Ошибки ниже. Дедлайн и пределы в [интеграциях](03_INTEGRATION_DESIGN.md). | `main.research_cadastre` → `CadastreResearch.execute` → НСПД |
@@ -29,15 +31,26 @@
 | 409 | `busy`, `source_changed` |
 | 422 | `invalid_input`, `radius_disabled`, `missing_contour`, `request_budget_exceeded` |
 | 429 | `cooldown`, при известной паузе `Retry-After` |
+| 499 | `cancelled`, отмена операции 2000 м. При закрытом соединении клиент не получит ответ. |
 | 502 | `incomplete_response`, `response_budget_exceeded`, `invalid_response` и прочие непереведённые ошибки |
 | 503 | `upstream_unavailable`, `tls_configuration` |
 | 504 | `deadline_exceeded` |
 
 Тело ошибки `{detail:{code,message},coverage,request_id}`. `coverage:"partial"` означает усечение; у прочих отказов `"failed"`. У legacy-кадастра `detail` строковый для HTTPException, Nominatim и Overpass также возвращают строку при `ServiceError`. Legacy обогащение кодирует бизнес-отказ в HTTP 200.
 
+При 200 поле `coverage` для кадастрового исследования имеет значение `unknown` при отсутствии явных пропусков или `partial` при отброшенных непригодных записях. `coverage_details.confirmed` остаётся `false`. Повтор того же результата из кеша сохраняет исходное значение `retrieved_at`.
+
+### Ответ поиска ООПТ
+
+Элемент `zones` содержит `registry_number`, `name` или null, `distance_m`, `boundary_distance_m`, `inside`, `nearest_boundary`, `marker`, `geometry` и доступные `attributes`. Координаты объектов карты и ближайшей границы заданы в метрах локальной AEQD относительно `center`. Геометрия карты обрезана по области и упрощена с допуском 1 м. Для касания без площади `geometry: null`, доступна точка `marker`. Расстояния вычислены по исходному контуру после преобразования EPSG:3857 → AEQD.
+
+`coverage` имеет значение `unknown` или `partial`, `legal_status` всегда `unverified`. Пустой список имеет HTTP 200. Отказы используют объект `detail` с кодом и сообщением. При 429 передаётся `Retry-After`, подтверждённое сервером усечение приводит к 502 с `coverage: partial`.
+
+Запрос карточки возвращает только доступные атрибуты записи с точно совпадающим реестровым номером. Среди них название, вид границы, кадастровый код, даты, реквизиты документа и режим охраны. Контур и измерения берутся из пространственного ответа. [Поля и проверка CR-011.1](../CR-011.1/README.md)
+
 ## Рабочие исследования
 
-Все маршруты обслуживает [research_api.py](../../app/research_api.py) через `ResearchStore`. Внешние геосервисы в этом router не вызываются. HTTP 422 возможен при неверном UUID; существующий UUID без папки даёт 404. Для записываемого тела лимит `MAX_BODY`, также действуют лимиты файлов и геометрии.
+Все маршруты обслуживает [research_api.py](../../app/research_api.py) через `ResearchStore`. Внешние геосервисы в этом router не вызываются. HTTP 422 возможен при неверном UUID, ошибке структуры или повреждённом файле; отсутствующая папка UUID даёт 404. При ошибке Pydantic строковый `detail` содержит путь к первому проблемному полю, если поле определено. Значения из запроса в сообщение не включаются. Для записываемого тела лимит `MAX_BODY`, также действуют лимиты файлов и геометрии.
 
 | Метод и путь | Параметры и тело | Ответ и ошибки |
 |---|---|---|
@@ -48,7 +61,7 @@
 | `PUT /api/researches/{research_id}` | UUID и `UpdateResearch`: обязательны `revision:int≥1` и `state:WorkingState`, необязательны `title:string\|null` до 600, `cadastre:CadastreData\|null`, `osm:OsmData\|null` | 200 `{research}` с новой ревизией; 404/409/413/422/503. Пропущенный набор оставляет файл, явный null очищает. |
 | `POST /api/researches/{research_id}/open` | UUID, тело отсутствует | 200 полный документ и установка активного UUID после проверки; 404/422/503. Ревизия прежняя. |
 | `POST /api/researches/{research_id}/close` | UUID и `CloseResearch` с `revision:int≥1` | 200 `{closed:true}` и снятие активного указателя; 404/409/413/422/503. Файлы сохраняются. |
-| `GET /api/researches/{research_id}/reports` | UUID, тело и query отсутствуют | 200 `{research:{title,source_number,revision},report}`; `report:null` без сохранённой выборки, иначе две таблицы и метаданные. 404/409/422/503, `Cache-Control:no-store`. Источник только сохранённый активный кадастр. |
+| `GET /api/researches/{research_id}/reports` | UUID, тело и query отсутствуют | 200 `{research:{title,source_number,revision},report}`, где `report:null` означает отсутствие сохранённой выборки. Иначе возвращаются обе таблицы, фактический радиус, дата получения и полнота. 404/409/422/503, `Cache-Control:no-store`. Данные читаются из сохранённого активного кадастра. |
 
 ## Страницы, статические файлы и OpenAPI
 
@@ -56,10 +69,9 @@
 
 | Метод и путь | Пример запроса | Ответ | Код |
 |---|---|---|---|
-| `GET /` | `GET / HTTP/1.1` | 200 HTML старого интерфейса OSM, `app/static/index.html` | `main.index` |
-| `GET /map` | `GET /map HTTP/1.1` | 200 HTML с `id="workspace"` и модульным скриптом | `main.map_first_page` |
-| `GET /cadastre-experiment` | `GET /cadastre-experiment HTTP/1.1` | 200 HTML с `id="cadastre-map"` | `main.cadastre_experiment_page` |
-| `GET /static/{path}`, HEAD | `GET /static/map-first/index.html HTTP/1.1` | 200 HTML для примера; тип зависит от файла. HEAD без тела, 304 условный, 404 отсутствующий ресурс, 405 неподдерживаемый метод. | `StaticFiles` |
+| `GET /` | `GET / HTTP/1.1` | 200 HTML Map First с `id="workspace"` | `main.map_first_page` |
+| `GET /map` | `GET /map HTTP/1.1` | 200 тот же HTML Map First | `main.map_first_page` |
+| `GET /static/{path}`, HEAD | `GET /static/map-first/index.html HTTP/1.1` | 200 HTML для примера; тип зависит от файла. HEAD без тела, 304 условный, 404 отсутствующий ресурс, 405 неподдерживаемый метод. Снимок статики процесса, `Cache-Control: no-store`. | `FrontendFiles` поверх `StaticFiles` |
 | `GET /openapi.json`, HEAD | `GET /openapi.json HTTP/1.1` | 200 JSON с `openapi`, `info` и `paths`, HEAD без тела | FastAPI |
 | `GET /docs`, HEAD | `GET /docs HTTP/1.1` | 200 HTML Swagger UI, HEAD без тела | FastAPI |
 | `GET /docs/oauth2-redirect`, HEAD | `GET /docs/oauth2-redirect HTTP/1.1` | 200 HTML вспомогательной страницы Swagger. OAuth приложения не настроен. | FastAPI |
@@ -67,7 +79,7 @@
 
 ## Совместимость
 
-`/api/research` загружает OSM по точке, `/api/researches` хранит исследования. Map First использует старый `source` и старый POST эксперимента как fallback на 500 м, если не получил пригодные capabilities. Старые страницы используют свои действующие маршруты. Серверных маршрутов экспорта нет; файлы Markdown, CSV и GeoJSON формируются в браузере.
+`/api/research` загружает OSM по точке, `/api/researches` хранит исследования. Map First использует `/api/cadastre-experiment/source` и `/api/cadastre-experiment/basemaps`, а исследование выполняет только через `POST /api/cadastre/research`. Удалённые URL страниц `/legacy/osm`, `/legacy/cadastre-experiment` и `/cadastre-experiment` возвращают 404. Два deprecated POST остаются доступны внешним клиентам. Файлы Markdown, CSV и GeoJSON формируются в браузере.
 
 **Код** — [main.py](../../app/main.py), [research_api.py](../../app/research_api.py), [кадастровые контракты](../../app/cadastre_research.py), [хранилище](../../app/research_schema.py), [экспорт OSM](../../app/static/map-first/osm-export.js), [экспорт Markdown](../../app/static/map-first/land-reports.js).
 
@@ -79,7 +91,7 @@
 
 ```http
 GET /api/health HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -93,7 +105,7 @@ Host: 127.0.0.1:8003
 
 ```http
 GET /api/config HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -106,7 +118,7 @@ Host: 127.0.0.1:8003
 
 ```http
 GET /api/cadastre-experiment/basemaps HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -119,7 +131,7 @@ Host: 127.0.0.1:8003
 
 ```http
 GET /api/geocode?q=%D0%9F%D1%80%D0%B8%D0%BC%D0%B5%D1%80%20%D0%B0%D0%B4%D1%80%D0%B5%D1%81%D0%B0 HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -133,7 +145,7 @@ Host: 127.0.0.1:8003
 
 ```http
 POST /api/research HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {"lat":53.5501,"lon":49.2801,"radius":500,"source_label":"Пример точки"}
@@ -151,7 +163,7 @@ Content-Type: application/json
 
 ```http
 GET /api/cadastre-experiment/source?number=63%3A09%3A0102159%3A100 HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -167,7 +179,7 @@ Host: 127.0.0.1:8003
 
 ```http
 POST /api/cadastre/source-candidates HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {"lat":53.5501,"lon":49.2801}
@@ -189,7 +201,7 @@ Content-Type: application/json
 
 ```http
 POST /api/cadastre-experiment/research HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {"number":"63:09:0102159:100"}
@@ -213,7 +225,7 @@ Content-Type: application/json
 
 ```http
 GET /api/cadastre/capabilities HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -227,7 +239,7 @@ Host: 127.0.0.1:8003
 
 ```http
 POST /api/cadastre/research HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {"number":"63:09:0102159:100","radius_m":500}
@@ -253,7 +265,7 @@ Content-Type: application/json
 
 ```http
 POST /api/cadastre/research HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {"number":"63:09:0102159:100","radius_m":2000}
@@ -271,7 +283,7 @@ Content-Type: application/json
 
 ```http
 POST /api/cadastre/enrich HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {"osm_type":"node","osm_id":11,"coordinates":[49.28,53.55]}
@@ -296,7 +308,7 @@ Content-Type: application/json
 
 ```http
 GET /api/researches/active HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -309,7 +321,7 @@ Host: 127.0.0.1:8003
 
 ```http
 POST /api/researches HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {}
@@ -327,7 +339,7 @@ Content-Type: application/json
 
 ```http
 PUT /api/researches/4609c453-3ff7-47c4-9115-ef56a6af81e3 HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {"revision":1,"state":{"cadastre_radius":1000}}
@@ -343,7 +355,7 @@ Content-Type: application/json
 
 ```http
 GET /api/researches/active HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -356,7 +368,7 @@ Host: 127.0.0.1:8003
 
 ```http
 GET /api/researches HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -370,7 +382,7 @@ Host: 127.0.0.1:8003
 
 ```http
 GET /api/researches/4609c453-3ff7-47c4-9115-ef56a6af81e3 HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -385,7 +397,7 @@ Host: 127.0.0.1:8003
 
 ```http
 GET /api/researches/4609c453-3ff7-47c4-9115-ef56a6af81e3/reports HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -399,7 +411,7 @@ Host: 127.0.0.1:8003
 
 ```http
 POST /api/researches/4609c453-3ff7-47c4-9115-ef56a6af81e3/open HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 ```
 
 ```json
@@ -414,7 +426,7 @@ Host: 127.0.0.1:8003
 
 ```http
 POST /api/researches/4609c453-3ff7-47c4-9115-ef56a6af81e3/close HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {"revision":3}
@@ -430,7 +442,7 @@ Content-Type: application/json
 
 ```http
 PUT /api/researches/4609c453-3ff7-47c4-9115-ef56a6af81e3 HTTP/1.1
-Host: 127.0.0.1:8003
+Host: 127.0.0.1:8000
 Content-Type: application/json
 
 {"revision":1,"state":{}}

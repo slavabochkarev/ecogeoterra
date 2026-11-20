@@ -6,6 +6,7 @@
   <title>ЭкоГеоТерра · Карта</title>
   <link rel="stylesheet" href="/static/vendor/leaflet.css">
   <link rel="stylesheet" href="/static/map-first/map.css">
+  <link rel="stylesheet" href="/static/map-first/oopt.css">
   <script src="/static/vendor/leaflet.js" defer></script>
   <script src="/static/vendor/esri-leaflet.js" defer></script>
   <script src="/static/cadastre-esri.js" defer></script>
@@ -21,6 +22,22 @@
         </div>
       </footer>
     </div>
+
+    <section id="oopt-map-pane" class="oopt-map-pane surface" aria-labelledby="oopt-map-heading" hidden>
+      <header>
+        <h2 id="oopt-map-heading">Круговая карта ООПТ</h2>
+        <p id="oopt-map-caption"></p>
+      </header>
+      <div class="oopt-map-area" id="oopt-map-area">
+        <p id="oopt-map-empty">Карта появится после поиска.</p>
+        <svg id="oopt-map" viewBox="-114 -114 228 228" role="group" aria-label="Карта ООПТ в метрической проекции" hidden></svg>
+      </div>
+      <footer id="oopt-map-key" hidden>
+        <span><i class="oopt-key-center" aria-hidden="true"></i>Исходная точка</span>
+        <span><i class="oopt-key-zone" aria-hidden="true"></i>Контур ООПТ</span>
+        <span><i class="oopt-key-selection" aria-hidden="true"></i>Выбранная ООПТ</span>
+      </footer>
+    </section>
 
     <header class="toolbar surface" id="toolbar">
       <h1 class="brand"><span class="brand-mark" aria-hidden="true">◇</span><span class="brand-name">ЭкоГеоТерра</span></h1>
@@ -51,12 +68,12 @@
         <button type="submit" class="button" id="find-parcel" disabled>Найти</button>
       </form>
       <div class="research">
-        <select id="radius" aria-label="Радиус исследования" aria-describedby="radius-availability applied-radius">
+        <select id="radius" aria-label="Радиус исследования" aria-describedby="radius-availability">
           <option value="500" selected>500 м</option>
           <option value="1000" disabled>1000 м</option>
           <option value="2000" disabled>2000 м</option>
         </select>
-        <button type="button" class="button primary" id="research-cadastre" aria-describedby="radius-availability applied-radius" disabled>Исследовать</button>
+        <button type="button" class="button primary" id="research-cadastre" aria-describedby="radius-availability" disabled>Исследовать</button>
       </div>
       <div class="view-tools">
         <button type="button" class="button" id="show-panel" aria-label="Панель сведений" title="Сведения"
@@ -89,7 +106,6 @@
     </div>
 
     <div class="map-notices">
-      <output class="map-status surface cadastre-radius" id="applied-radius" hidden></output>
       <p class="map-status surface cadastre-status" id="cadastre-status" role="status" hidden></p>
       <div class="map-status surface" id="tile-status" hidden>
         <p id="tile-message" role="status"></p>
@@ -115,6 +131,7 @@
         <div class="tabs" role="tablist" aria-label="Вкладки сведений">
           <button type="button" class="button" id="cadastre-tab" role="tab" aria-controls="cadastre" aria-selected="true">Кадастр</button>
           <button type="button" class="button" id="objects-tab" role="tab" aria-controls="objects" aria-selected="false" tabindex="-1">Объекты</button>
+          <button type="button" class="button" id="oopt-tab" role="tab" aria-controls="oopt" aria-selected="false" tabindex="-1">Исследование</button>
           <button type="button" class="button" id="coordinates-tab" role="tab" aria-controls="coordinates" aria-selected="false" tabindex="-1">Координаты</button>
         </div>
         <button type="button" class="button icon" id="close-panel" aria-label="Свернуть сведения">×</button>
@@ -189,6 +206,50 @@
           </div>
         </section>
         <section id="osm-card" hidden aria-label="Выбранный объект OSM"></section>
+      </div>
+      <div class="details-content oopt-panel" id="oopt" role="tabpanel" aria-labelledby="oopt-tab" tabindex="0" hidden>
+        <h2>Исследование особых зон</h2>
+        <p class="oopt-source" id="oopt-source">Сначала выберите объект или точку на карте.</p>
+        <p class="oopt-coordinates" id="oopt-coordinates" hidden></p>
+        <form id="oopt-form">
+          <label for="oopt-diameter">Диаметр исследования</label>
+          <div class="oopt-controls">
+            <select id="oopt-diameter" aria-describedby="oopt-radius">
+              <option value="10">10 км</option>
+              <option value="40" selected>40 км</option>
+              <option value="100">100 км</option>
+              <option value="200">200 км</option>
+            </select>
+            <button class="button primary" id="oopt-run" type="submit" disabled>Исследовать</button>
+          </div>
+          <output id="oopt-radius" for="oopt-diameter">Радиус 20 км</output>
+        </form>
+        <p class="oopt-status" id="oopt-status" role="status" hidden></p>
+        <section id="oopt-results" hidden>
+          <h2>Найденные ООПТ <span id="oopt-count"></span></h2>
+          <p class="oopt-coverage" id="oopt-coverage">Полнота выдачи и юридическая актуальность границ не подтверждены.</p>
+          <div id="oopt-list-view">
+            <div class="oopt-selection" id="oopt-selection" hidden>
+              <span id="oopt-selection-number"></span>
+              <button type="button" class="button outlined" id="oopt-details-open">Подробнее</button>
+            </div>
+            <label for="oopt-filter" id="oopt-filter-label">Поиск по реестровому номеру</label>
+            <input type="search" id="oopt-filter" autocomplete="off" spellcheck="false">
+            <p id="oopt-filter-empty" hidden>По этому номеру ничего не найдено.</p>
+            <ul id="oopt-list" class="parcel-list" aria-label="Найденные ООПТ"></ul>
+          </div>
+          <div class="oopt-card" id="oopt-card" role="region" aria-labelledby="oopt-card-title" hidden>
+            <button type="button" class="button outlined" id="oopt-details-back">← К списку ООПТ</button>
+            <h3 id="oopt-card-title" tabindex="-1"></h3>
+            <p id="oopt-card-status" role="status" hidden></p>
+            <button type="button" class="button outlined" id="oopt-details-retry" hidden>Повторить загрузку</button>
+            <dl class="oopt-card-fields" id="oopt-card-fields"></dl>
+            <details id="oopt-card-restrictions" hidden>
+              <summary>Режим охраны из записи НСПД</summary>
+              <p id="oopt-card-restrictions-text"></p>
+            </details>
+          </div>
+        </section>
       </div>
       <div class="details-content" id="coordinates" role="tabpanel" aria-labelledby="coordinates-tab" tabindex="0" hidden>
         <section id="address-search-results" hidden>
@@ -267,6 +328,7 @@
     <dl id="land-report-meta" class="land-report-meta" hidden></dl>
     <p id="land-report-status" role="status" hidden></p>
     <p id="land-report-note" class="land-report-note" hidden></p>
+    <button type="button" class="button outlined" id="land-report-retry" hidden>Повторить сохранение</button>
     <div id="land-report-actions" class="land-report-actions" hidden>
       <div class="tabs" role="tablist" aria-label="Кадастровые отчёты">
         <button type="button" class="button" id="land-all-tab" role="tab" aria-controls="land-all-panel" aria-selected="true">Все участки</button>

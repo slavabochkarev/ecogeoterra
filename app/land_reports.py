@@ -8,10 +8,12 @@ import re
 from unicodedata import normalize
 
 from pyproj import Geod
-from shapely import prepare
+from pyproj.exceptions import ProjError
+from shapely import prepare, transform
 from shapely.errors import GEOSException
 from shapely.geometry import shape
 
+from .cadastre_experiment import buffer_geometry
 from .geo import DIRECTIONS
 from .research_store import ResearchError
 
@@ -103,10 +105,12 @@ def build_reports(document):
 
     saved = cadastre["result"]
     try:
-        buffer = _polygon(saved["buffer"]["geometry"])
-        prepare(buffer)
-        origin = _polygon(cadastre["source"]["geometry"]).representative_point()
-    except (GEOSException, ValueError) as exc:
+        _polygon(saved["buffer"]["geometry"])
+        source = cadastre["source"]
+        origin = _polygon(source["geometry"]).representative_point()
+        context, region, _ = buffer_geometry(source, saved["radius_m"])
+        prepare(region)
+    except (GEOSException, ProjError, ValueError) as exc:
         raise ResearchError(422, "В сохранённой выборке повреждена геометрия исходного участка или буфера.") from exc
     try:
         version, by_code, by_name = _rules()
@@ -120,10 +124,13 @@ def build_reports(document):
             continue
         try:
             polygon = _polygon(feature["geometry"])
-            if not buffer.intersects(polygon):
+            metric = transform(polygon, context.forward.transform, interleaved=False)
+            if metric.is_empty or not metric.is_valid:
+                raise ValueError("Некорректный контур в метрической CRS")
+            if not region.intersects(metric):
                 continue
             direction = _direction(origin, polygon)
-        except (GEOSException, ValueError):
+        except (GEOSException, ProjError, ValueError):
             skipped += 1
             continue
         props = feature["properties"]
@@ -149,7 +156,7 @@ def build_reports(document):
     coverage = saved["coverage"]
     if skipped:
         coverage = "partial"
-    elif coverage == "complete" and not (saved.get("coverage_details") or {}).get("confirmed"):
+    elif coverage == "complete":
         coverage = "unknown"
     return {"research": metadata, "report": {
         "radius_m": saved["radius_m"], "retrieved_at": saved["retrieved_at"] or None,

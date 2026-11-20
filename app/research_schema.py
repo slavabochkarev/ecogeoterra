@@ -52,7 +52,7 @@ class LayerFlags(Schema):
 class WorkingState(Schema):
     camera: Camera = Field(default_factory=lambda: Camera(lat=55, lon=50, zoom=4))
     basemap: Literal["osm", "esri"] = "osm"
-    tab: Literal["cadastre", "objects", "coordinates"] = "cadastre"
+    tab: Literal["cadastre", "objects", "oopt", "coordinates"] = "cadastre"
     panel_open: bool = False
     map_only: bool = False
     layers: LayerFlags = Field(default_factory=LayerFlags)
@@ -62,6 +62,7 @@ class WorkingState(Schema):
     hide_unnamed: bool = False
     cadastre_selected: CadastralNumber | None = None
     osm_selected: str | None = Field(default=None, pattern=r"^(node|way|relation)/[0-9]{1,20}$")
+    oopt_anchor: Literal["cadastre", "osm", "coordinates"] | None = None
     osm_origin: LabeledPoint | None = None
     location: LabeledPoint | None = None
     coordinates: ReferencePoint | None = None
@@ -227,7 +228,9 @@ def _parcel(raw, budget):
     filtered = {"number": number}
     for field in ("address", "land_category", "permitted_use", "geometry_status", "category_bucket"):
         if props.get(field) is not None:
-            filtered[field] = _text(props[field])
+            # NSPD can return a full VRI clause; the cadastral file limit bounds its size.
+            limit = FILE_LIMITS["cadastre"] if field == "permitted_use" else 1000
+            filtered[field] = _text(props[field], limit)
     if props.get("area_m2") is not None:
         filtered["area_m2"] = _number(props["area_m2"])
     if props.get("label_point") is not None:

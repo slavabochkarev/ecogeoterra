@@ -41,10 +41,9 @@ function readNeighbors(data, sourceNumber, radius) {
   return neighbors;
 }
 
-export function installCadastre(map, leaflet, layers, element, showCadastre, changed) {
+export function installCadastre(map, leaflet, layers, element, showCadastre, changed, onSelect) {
   const field = element("cadastre-number");
   const radiusInput = element("radius");
-  const appliedRadius = element("applied-radius");
   const availability = element("radius-availability");
   const research = element("research-cadastre");
   const status = element("cadastre-status");
@@ -54,9 +53,9 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
   let selectedId;
   let sourceRevision;
   let generation = 0;
-  let useLegacyApi = true;
   let busy = false;
   let statusTimer;
+  let researchRequest;
 
   function select(id, fromMap) {
     const feature = id === source?.id ? source : neighbors.get(id);
@@ -64,6 +63,7 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
     selectedId = id;
     cadastreMap.highlight(feature);
     panel.select(feature);
+    onSelect(feature);
     showCadastre();
     if (fromMap) panel.revealSelection();
     changed();
@@ -114,8 +114,6 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
     selectedId = selected.id;
     cadastreMap.replace(source, neighbors, result?.buffer, selected, prepared);
     panel.render(source, neighbors, result, selected);
-    appliedRadius.hidden = !result;
-    appliedRadius.textContent = result ? `На карте: ${radiusLabel(result.radius_m)}.` : "";
     if (area) cadastreMap.fit(area);
   }
 
@@ -131,6 +129,7 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
     field.value = parcel.id;
     field.removeAttribute("aria-invalid");
     display("source");
+    onSelect(parcel);
     syncControls();
     changed();
   }
@@ -144,7 +143,7 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
       adopt(data.parcel);
       const notes = Array.isArray(data.warnings) ? data.warnings : [];
       setStatus([`Исходный участок ${number} найден.`, data.cache_hit ? "Ответ из кеша." : "", ...notes]
-        .filter(Boolean).join(" "));
+        .filter(Boolean).join(" "), false, { transient: !notes.length, warning: Boolean(notes.length) });
     });
   }
 
@@ -153,22 +152,22 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
     if (!isParcel(parcel, number)) throw new Error("Для этого участка нет проверенного контура.");
     adopt({ ...parcel, properties: { ...parcel.properties, measurement: { relation: "source" } } });
     showCadastre();
-    setStatus(`Исходный участок ${number} выбран. Можно запустить исследование.`);
+    setStatus(`Исходный участок ${number} выбран. Можно запустить исследование.`, false, { transient: true });
   }
 
   syncControls();
   field.addEventListener("input", syncControls);
   radiusInput.addEventListener("change", () => {
     generation += 1;
+    researchRequest?.abort();
     panel.setAttempt();
-    setStatus(`Для следующего исследования выбрано ${radiusLabel(Number(radiusInput.value))}.`);
+    setStatus(`Для следующего исследования выбрано ${radiusLabel(Number(radiusInput.value))}.`, false, { transient: true });
     syncControls();
     changed();
   });
 
   request("/api/cadastre/capabilities", {}, 5000).then(data => {
     if (!Array.isArray(data.radii) || !data.radii.some(item => item?.radius_m === 500 && item.enabled === true)) return;
-    useLegacyApi = false;
     const disabled = [];
     for (const option of radiusInput.options) {
       const value = Number(option.value);
@@ -188,21 +187,23 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
     const token = generation;
     const current = () => token === generation;
     const number = source.id;
-    const legacy = useLegacyApi;
     panel.setAttempt();
     run(`Загружаем участки в пределах ${radiusLabel(radius)} от границ исходного участка…`, async () => {
+      const controller = new AbortController();
+      researchRequest = controller;
       try {
-        const body = legacy ? { number } : { number, radius_m: radius, source_revision: sourceRevision };
-        const data = await request(legacy ? `${experimentApi}/research` : researchApi, {
+        const body = { number, radius_m: radius, source_revision: sourceRevision };
+        const data = await request(researchApi, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
+          signal: controller.signal,
         }, 40000);
         if (!current()) return;
         const nextNeighbors = readNeighbors(data, number, radius);
-        if (!legacy && (!/^[0-9a-f]{64}$/.test(data.source_revision) ||
+        if (!/^[0-9a-f]{64}$/.test(data.source_revision) ||
             (sourceRevision && data.source_revision !== sourceRevision) ||
-            JSON.stringify(data.source.geometry) !== JSON.stringify(source.geometry))) {
+            JSON.stringify(data.source.geometry) !== JSON.stringify(source.geometry)) {
           throw new Error("Исходный контур изменился. Найдите участок снова перед исследованием.");
         }
         const prepared = await cadastreMap.prepare(data.source, nextNeighbors, current);
@@ -212,15 +213,17 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
         result = data;
         neighbors = nextNeighbors;
         display("buffer", prepared);
+        onSelect(neighbors.get(selectedId) ?? source, true);
         changed();
         const warning = data.coverage === "partial" || Boolean(data.warnings?.length);
-        const count = `Соседних участков: ${neighbors.size}.`;
+        const count = `${radiusLabel(radius)}. Соседних участков: ${neighbors.size}.`;
         const cache = data.cache_hit ? " Ответ из кеша." : "";
         if (warning) {
           const heading = data.coverage === "partial" ? "Получена неполная выборка." : "Исследование завершено с предупреждениями.";
           setStatus(`${heading} ${count} Подробнее во вкладке «Кадастр».`, false, { warning: true });
         } else {
-          setStatus(`Кадастровое исследование завершено. ${count}${cache}`, false, { transient: true });
+          setStatus(`Кадастровое исследование завершено. ${count}${cache} Полнота выдачи НСПД не подтверждена.`,
+            false, { transient: true });
         }
       } catch (error) {
         if (!current()) return;
@@ -228,6 +231,8 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
         const message = `${title} (${radiusLabel(radius)}). ${error.message}`;
         panel.setAttempt(message);
         throw new Error(message);
+      } finally {
+        researchRequest = undefined;
       }
     });
   });
@@ -239,6 +244,7 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
 
   async function restore(data, state) {
     generation += 1;
+    researchRequest?.abort();
     radiusInput.value = String(state.cadastre_radius);
     field.value = state.query;
     field.removeAttribute("aria-invalid");
@@ -254,8 +260,6 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
       display(null, prepared);
     } else {
       selectedId = undefined;
-      appliedRadius.hidden = true;
-      appliedRadius.textContent = "";
       cadastreMap.clear();
       panel.clear();
     }
@@ -264,6 +268,7 @@ export function installCadastre(map, leaflet, layers, element, showCadastre, cha
 
   return {
     findNumber, confirmSource, setStatus, getOsmOrigin, refreshVisibility: cadastreMap.refreshVisibility,
+    selection: () => neighbors.get(selectedId) ?? source,
     parcelsAt: cadastreMap.parcelsAt, selectOnMap: id => select(id, true), restore, busy: () => busy,
     snapshot: () => ({ source, result, selectedId, radius: Number(radiusInput.value), query: field.value }),
   };

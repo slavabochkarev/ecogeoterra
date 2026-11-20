@@ -3,8 +3,8 @@ import { categories, formatDistance, numberFormat } from "./cadastre-format.js";
 const missing = "Нет данных";
 const dateFormat = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" });
 const coverageLabels = {
-  complete: "Полнота выдачи подтверждена.",
-  unknown: "Полнота выдачи НСПД неизвестна.",
+  complete: "Полнота выдачи НСПД не подтверждена.",
+  unknown: "Полнота выдачи НСПД не подтверждена.",
   partial: "Неполная выдача. Показаны только пригодные участки.",
 };
 const relations = {

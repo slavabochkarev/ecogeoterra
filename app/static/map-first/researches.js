@@ -9,9 +9,13 @@ const send = (path, method, data) => request(path, {
 
 function sameDatasets(left, right) {
   return {
-    cadastre: left.cadastre.source === right.cadastre.source && left.cadastre.result === right.cadastre.result,
+    cadastre: sameCadastre(left.cadastre, right.cadastre),
     osm: left.osm.data === right.osm.data && left.osm.requestedCategories === right.osm.requestedCategories,
   };
+}
+
+function sameCadastre(left, right) {
+  return left.source === right.source && left.result === right.result;
 }
 
 function cadastrePayload(cadastre) {
@@ -44,7 +48,7 @@ export function installResearches(element, workspace, { snapshot, restore, prepa
   const dialog = element("study-dialog");
   const list = element("study-list");
   const listStatus = element("study-list-status");
-  const reports = installLandReports(element);
+  const reports = installLandReports(element, () => flush());
   let active;
   let pendingResume;
   let baseline;
@@ -55,6 +59,19 @@ export function installResearches(element, workspace, { snapshot, restore, prepa
   let blocked = false;
   let explicitSave = false;
   let nameDraft;
+  let reportWritePending = false;
+  let saveError = "";
+
+  function refreshReports() {
+    if (!active || !reports.isOpen()) return;
+    const pending = reportWritePending || Boolean(nameDraft) ||
+      !sameCadastre(baseline.cadastre, snapshot().cadastre);
+    reports.sync({
+      savedKey: JSON.stringify([active.datasets.cadastre.sha256, active.title]),
+      pending,
+      error: pending && blocked ? saveError : "",
+    });
+  }
 
   function message(text = "", kind = "") {
     status.textContent = text;
@@ -91,6 +108,7 @@ export function installResearches(element, workspace, { snapshot, restore, prepa
   function schedule() {
     if (!active || switching) return;
     dirty = true;
+    refreshReports();
     if (blocked) return;
     message("Сохранение…", "saving");
     clearTimeout(timer);
@@ -113,17 +131,26 @@ export function installResearches(element, workspace, { snapshot, restore, prepa
       if (!same.osm) payload.osm = next.osm.data ? {
         result: next.osm.data, requested_categories: next.osm.requestedCategories,
       } : null;
+      reportWritePending = !same.cadastre || Boolean(draft);
       message("Сохранение…", "saving");
+      refreshReports();
       try {
         ({ research: active } = await send(`${api}/${active.id}`, "PUT", payload));
         baseline = next;
+        blocked = false;
+        saveError = "";
         if (nameDraft === draft) nameDraft = undefined;
         activeControls();
       } catch (error) {
         dirty = blocked = true;
         explicitSave ||= force;
-        message(`Ошибка сохранения. ${error.message}`, "alert");
+        const recovery = error.status === 409 ? " Чтобы открыть сохранённую ревизию, обновите страницу." : "";
+        saveError = `Ошибка сохранения. ${error.message}${recovery}`;
+        message(saveError, "alert");
         return false;
+      } finally {
+        reportWritePending = false;
+        refreshReports();
       }
     }
     blocked = false;
@@ -135,7 +162,10 @@ export function installResearches(element, workspace, { snapshot, restore, prepa
     clearTimeout(timer);
     if (!active) return Promise.resolve(true);
     if (force) dirty = explicitSave = true;
-    if (!saving) saving = savePending().finally(() => { saving = undefined; });
+    if (!saving) {
+      blocked = false;
+      saving = savePending().finally(() => { saving = undefined; });
+    }
     return saving;
   }
 
@@ -226,7 +256,10 @@ export function installResearches(element, workspace, { snapshot, restore, prepa
   });
   save.addEventListener("click", () => flush(true));
   resume.addEventListener("click", () => open(pendingResume?.id));
-  element("study-reports").addEventListener("click", () => reports.open(active?.id, dirty || Boolean(saving)));
+  element("study-reports").addEventListener("click", () => {
+    reports.open(active?.id);
+    refreshReports();
+  });
 
   rename.addEventListener("click", () => {
     if (!active) return;

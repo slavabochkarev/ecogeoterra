@@ -6,6 +6,7 @@ import { installSearch } from "./search.js";
 import { installAttribution } from "./attribution.js";
 import { installOsm } from "./osm.js";
 import { installResearches } from "./researches.js";
+import { coordinateAnchor, installOopt, osmAnchor, parcelAnchor } from "./oopt.js";
 
 const element = id => document.getElementById(id);
 const workspace = element("workspace");
@@ -16,7 +17,7 @@ const emptyResearchState = () => ({
   camera: { lat: 55, lon: 50, zoom: 4 }, basemap: "osm", tab: "cadastre", panel_open: false, map_only: false,
   layers: { boundaries: true, labels: true, fill: false, osm: false },
   cadastre_radius: 500, osm_radius: 2000, osm_categories: null, hide_unnamed: false,
-  cadastre_selected: null, osm_selected: null, osm_origin: null, location: null, coordinates: null, query: "",
+  cadastre_selected: null, osm_selected: null, oopt_anchor: null, osm_origin: null, location: null, coordinates: null, query: "",
 });
 
 if (!leaflet) {
@@ -81,9 +82,15 @@ if (!leaflet) {
     changed();
   });
   const panels = installPanels(workspace, state, element, layerControls.show, updateLayout, changed);
-  const cadastre = installCadastre(map, leaflet, state.layers, element, () => panels.showTab("cadastre"), changed);
-  const osm = installOsm(map, leaflet, element, state, layerControls, panels.showTab, cadastre, attribution, changed);
-  const coordinates = installCoordinates(map, leaflet, element, osm.setOrigin, changed);
+  const oopt = installOopt(element);
+  const cadastre = installCadastre(map, leaflet, state.layers, element, () => panels.showTab("cadastre"), changed,
+    (feature, refresh = false) => {
+      if (!refresh || oopt.anchor() === "cadastre") oopt.setSource(parcelAnchor(feature));
+    });
+  const osm = installOsm(map, leaflet, element, state, layerControls, panels.showTab, cadastre, attribution, changed,
+    feature => { if (feature || oopt.anchor() === "osm") oopt.setSource(osmAnchor(feature)); });
+  const coordinates = installCoordinates(map, leaflet, element, osm.setOrigin, changed,
+    point => oopt.setSource(coordinateAnchor(point)));
   const search = installSearch(map, leaflet, state.layers, element, cadastre, coordinates.goTo,
     () => panels.showTab("coordinates"), osm.setOrigin, attribution, changed);
   const basemaps = installBasemaps(map, leaflet, element, attribution, changed);
@@ -98,6 +105,7 @@ if (!leaflet) {
       layers: Object.fromEntries(Object.entries(state.layers).map(([name, layer]) => [name, layer.visible])),
       cadastre_radius: parcels.radius, osm_radius: objects.radius, osm_categories: objects.categories,
       hide_unnamed: objects.hideUnnamed, cadastre_selected: parcels.selectedId ?? null, osm_selected: objects.selectedId ?? null,
+      oopt_anchor: oopt.anchor(),
       osm_origin: objects.origin ?? null, location: search.snapshot(), coordinates: coordinates.snapshot(), query: parcels.query,
     } };
   }
@@ -109,6 +117,15 @@ if (!leaflet) {
     await osm.restore(document.osm, saved);
     search.restore(saved.location);
     coordinates.restore(saved.coordinates);
+    const anchors = {
+      cadastre: parcelAnchor(cadastre.selection()),
+      osm: osmAnchor(osm.selection()),
+      coordinates: coordinateAnchor(saved.coordinates ?? saved.location, saved.location),
+    };
+    oopt.reset();
+    oopt.setSource((saved.oopt_anchor ? anchors[saved.oopt_anchor] : null)
+      ?? (saved.tab === "objects" ? anchors.osm : anchors[saved.tab])
+      ?? anchors.cadastre ?? anchors.osm ?? anchors.coordinates);
     layerControls.restore(saved.layers);
     panels.restore(saved);
     map.setView([saved.camera.lat, saved.camera.lon], saved.camera.zoom, { animate: false });
@@ -116,7 +133,7 @@ if (!leaflet) {
   }
 
   researches = installResearches(element, workspace, { snapshot, restore, emptyState: emptyResearchState,
-    prepareOpen: osm.ensureReady, isBusy: () => cadastre.busy() || osm.busy() || search.busy() });
+    prepareOpen: osm.ensureReady, isBusy: () => cadastre.busy() || osm.busy() || search.busy() || oopt.busy() });
   map.on("moveend zoomend", changed);
   updateLayout();
 }

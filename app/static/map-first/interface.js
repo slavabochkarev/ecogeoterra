@@ -61,6 +61,13 @@ export function installPanels(workspace, state, element, showLayers, updateLayou
   const tabs = [...details.querySelectorAll('[role="tab"]')];
   let modeReturnFocus;
 
+  function renderMapPane() {
+    const showingOopt = state.tab === "oopt" && state.panelOpen && !state.mapOnly;
+    workspace.classList.toggle("is-oopt-view", showingOopt);
+    element("oopt-map-pane").hidden = !showingOopt;
+    updateLayout();
+  }
+
   function renderMode() {
     const panelVisible = state.panelOpen && !state.mapOnly;
     toolbar.hidden = state.mapOnly;
@@ -69,7 +76,7 @@ export function installPanels(workspace, state, element, showLayers, updateLayou
     panelButton.setAttribute("aria-expanded", String(panelVisible));
     workspace.classList.toggle("is-panel-open", panelVisible);
     workspace.classList.toggle("is-map-only", state.mapOnly);
-    updateLayout();
+    renderMapPane();
     changed();
   }
 
@@ -82,6 +89,7 @@ export function installPanels(workspace, state, element, showLayers, updateLayou
       element(candidate.getAttribute("aria-controls")).hidden = !selected;
     }
     if (focus) tab.focus();
+    renderMapPane();
     changed();
   }
 

@@ -276,8 +276,6 @@ button:not(:disabled), select { cursor: pointer; }
 }
 .map-status p { margin: 0; }
 .map-status .button { margin-top: 4px; border-color: #dfd4be; }
-.cadastre-radius { justify-self: start; color: var(--muted); }
-.is-map-only .cadastre-radius,
 .is-map-only .cadastre-status { display: none; }
 
 #map-attributions {
